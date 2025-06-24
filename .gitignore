@@ -1,0 +1,6 @@
+*.mk
+hodr
+*.o
+*.a
+*.so
+control.*
