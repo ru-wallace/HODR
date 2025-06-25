@@ -27,13 +27,13 @@ typedef struct {
     int xpixels; // Number of horizontal pixels in the detector
     int ypixels; // Number of vertical pixels in the detector
     bool ACQ_FLAG; // Flag to indicate if acquisition should be started once temperature is stabilized
-    char FIFO_PATH[256]; // Path to the FIFO for temperature data transfer
     char OUT_FILE[256]; // Output file for data
 } HODR_Config_t;
 
-unsigned int hodr_tryMkFIFO(const char *fifoPath, int maxAttempts);
+
 unsigned int hodr_getDetectorSize(int *xpixels, int *ypixels);
-unsigned int hodr_init(char *andorPath, const char *FIFOPath, const char *outFile);
+unsigned int hodr_init(HODR_Config_t *config, char *andorPath, const char *outFile, bool resetConfig);
+unsigned int hodr_deinit();
 unsigned int hodr_setCoolerMode( bool mode);
 unsigned int hodr_getCurrentTemperatureFloat(float *temperature);
 unsigned int hodr_getCurrentTemperatureAndTargetTemperature(float *temperature, float *targetTemperature);
@@ -66,7 +66,6 @@ unsigned int hodr_getAcquisitionMode();
 unsigned int hodr_getReadMode();
 unsigned int hodr_getShutterType();
 unsigned int hodr_setKineticCycleTime(float time);
-unsigned int hodr_getFIFOPath(char *fifoPath, size_t size);
 unsigned int hodr_getOutFile(char *outFile, size_t size);
 unsigned int hodr_setFIFOPath(const char *fifoPath);
 unsigned int hodr_setOutFile(const char *outFile);

@@ -24,20 +24,21 @@
 
 pthread_mutex_t lock;
 pthread_mutex_t endThreadLock;
-pthread_mutex_t dataFileLock; // Mutex for data file operations
+pthread_mutex_t dataFileLock;        // Mutex for data file operations
 pthread_mutex_t acquisitionLoopLock; // Mutex for acquisition loop operations
-bool endThread = false; // Flag to signal the command thread to end
+bool endThread = false;              // Flag to signal the command thread to end
 
 char andorFile[256] = "../miniforge3/pkgs/andor2-sdk-2.104.30064-0/etc/andor/";
 char outFile[256]; // Output file for data
 
 int createDataFile(char *directory, char *filename);
 int appendToFile(const char *filename, int spectrumID, float *exposureTime, double *temperature, const int32_t *data, size_t size);
-int writeTempToFIFO(const char *fifoPath, float temperature, float targetTemperature);
-int readFIFOCommand(const char *fifoPath, char *commandBuffer, size_t bufferSize);
 int readCommandThread(void *arg);
 static void dbusOnNameAcquired(GDBusConnection *connection, const gchar *name, gpointer user_data);
 
+static gboolean db_activateHodr(Control *control, GDBusMethodInvocation *invocation, gpointer user_data);
+static gboolean db_deactivateHodr(Control *control, GDBusMethodInvocation *invocation, gpointer user_data);
+static gboolean db_resetHodr(Control *control, GDBusMethodInvocation *invocation, gpointer user_data);
 static gboolean db_setTemperature(Control *control, GDBusMethodInvocation *invocation, gint32 value, gpointer user_data);
 static gboolean db_getTemperature(gpointer control);
 static gboolean db_updateNCaptures(gpointer control);
@@ -48,38 +49,44 @@ static gboolean db_setAcquisitionMode(Control *control, GDBusMethodInvocation *i
 static gboolean db_stopAcquisition(Control *control, GDBusMethodInvocation *invocation, gpointer user_data);
 static gboolean db_setInterval(Control *control, GDBusMethodInvocation *invocation, gdouble interval, gpointer user_data);
 static gboolean db_getLastSpectrum(Control *control, GDBusMethodInvocation *invocation, guint ref, gpointer user_data);
-//static gboolean db_getData(Control *control, GDBusMethodInvocation *invocation, gint ref, gpointer user_data);
+// static gboolean db_getData(Control *control, GDBusMethodInvocation *invocation, gint ref, gpointer user_data);
 
-void* handleAcquisitionLoop();
-char tmpFIFO[256] = "../candor_server/www/tempFIFO"; // Temporary FIFO file for data transfer
-char inFIFO[256] = "/tmp/HODR_IN";                         // FIFO file for input commands
+void *handleAcquisitionLoop();
 
-char dataDir[256] = "/../candor_data"; // Directory for data files
+char dataDir[256] = "../candor_data"; // Directory for data files
 
 double lastTemperature = 0.0; // Last temperature read from the device
 
 uint32_t nTriggeredSpectra = 0; // Number of triggered spectra
-uint32_t nCapturedSpectra = 0; // Number of captured spectra
+uint32_t nCapturedSpectra = 0;  // Number of captured spectra
 
-int xpixels, ypixels;              // Detector size
+int xpixels, ypixels; // Detector size
 GMainLoop *loop;
 
 guint dataWaitFunctionRef;
 
+HODR_Config_t *hodr_cfg; // Pointer to HODR configuration structure
+
+bool andorActive = false; // Flag to indicate if Andor SDK is active
+
+pthread_t acqThread;
+
 int main()
 {
 
-    pthread_mutex_init(&lock, NULL);          // Initialize the mutex
-    pthread_mutex_init(&endThreadLock, NULL); // Initialize the end thread mutex
-    pthread_mutex_init(&dataFileLock, NULL);  // Initialize the data file mutex
+    pthread_mutex_init(&lock, NULL);                // Initialize the mutex
+    pthread_mutex_init(&endThreadLock, NULL);       // Initialize the end thread mutex
+    pthread_mutex_init(&dataFileLock, NULL);        // Initialize the data file mutex
     pthread_mutex_init(&acquisitionLoopLock, NULL); // Initialize the acquisition loop mutex
 
     unsigned int result;
-    if (hodr_init(andorFile, tmpFIFO, outFile) != DRV_SUCCESS)
+    if (hodr_init(hodr_cfg, andorFile, outFile, true) != DRV_SUCCESS)
     {
         fprintf(stderr, "Failed to initialize HODR.\n");
         return EXIT_FAILURE; // Initialization failed
     }
+
+    andorActive = true; // Set Andor SDK active flag
 
     int dataFileLength = createDataFile(dataDir, outFile); // Create data file
     if (dataFileLength < 0)
@@ -98,17 +105,6 @@ int main()
     int minTemp, maxTemp;
     hodr_getTemperatureRange(&minTemp, &maxTemp); // Get temperature range
 
-    // int32_t acquiredData[xpixels];
-
-    // Create a thread for reading commands from the FIFO
-
-    // if (result != 0) {
-    //     fprintf(stderr, "Failed to create command thread: %d\n", result);
-    //     return EXIT_FAILURE; // Thread creation failed
-    // }
-
-    // bool acquisitionStarted = false; // Flag to track if acquisition has started
-
     printf("HODR initialized successfully.\n");
     printf("Starting D-Bus server...\n");
     loop = g_main_loop_new(NULL, FALSE);
@@ -126,8 +122,8 @@ int main()
     printf("Command thread finished.\n");
     CancelWait();
 
-    //pthread_join(acqThread, NULL); // Wait for the acquisition thread to finish
-    // Clean up and shut down the Andor SDK
+    // pthread_join(acqThread, NULL); // Wait for the acquisition thread to finish
+    //  Clean up and shut down the Andor SDK
     result = AbortAcquisition(); // Abort acquisition if needed
 
     result = CoolerOFF(); // Turn off the cooler
@@ -147,37 +143,128 @@ int main()
 static void dbusOnNameAcquired(GDBusConnection *connection, const gchar *name, gpointer)
 {
     printf("D-Bus name '%s' acquired successfully.\n", name);
-    Control *control = control_skeleton_new();                                                    // Create a new Control skeleton
-    g_signal_connect(control, "handle-set_temperature", G_CALLBACK(db_setTemperature), NULL);     // Connect the signal for setting temperature
-
-    g_signal_connect(control, "handle-start_acquisition", G_CALLBACK(db_startAcquisition), NULL); // Connect the signal for starting acquisition
+    Control *control = control_skeleton_new();                                                         // Create a new Control skeleton
+    g_signal_connect(control, "handle-reset", G_CALLBACK(db_resetHodr), NULL);                         // Connect the signal for resetting HODR
+    g_signal_connect(control, "handle-activate", G_CALLBACK(db_activateHodr), NULL);                   // Connect the signal for activating HODR
+    g_signal_connect(control, "handle-deactivate", G_CALLBACK(db_deactivateHodr), NULL);               // Connect the signal for deactivating HODR
+    g_signal_connect(control, "handle-set_temperature", G_CALLBACK(db_setTemperature), NULL);          // Connect the signal for setting temperature
+    g_signal_connect(control, "handle-start_acquisition", G_CALLBACK(db_startAcquisition), NULL);      // Connect the signal for starting acquisition
     g_signal_connect(control, "handle-set_acquisition_mode", G_CALLBACK(db_setAcquisitionMode), NULL); // Connect the signal for setting acquisition mode
-    g_signal_connect(control, "handle-stop_acquisition", G_CALLBACK(db_stopAcquisition), NULL); // Connect the signal for stopping acquisition
-    g_signal_connect(control, "handle-set_interval", G_CALLBACK(db_setInterval), NULL); // Connect the signal for setting interval
-    g_signal_connect(control, "handle-get_data", G_CALLBACK(db_getLastSpectrum), NULL);                   // Connect the signal for getting data
-    g_signal_connect(control, "handle-stop_live", G_CALLBACK(db_stopLive), NULL);                 // Connect the signal for stopping live mode
-    g_signal_connect(control, "handle-exit", G_CALLBACK(db_exitMainLoop), NULL);                  // Connect the signal for exiting the application
+    g_signal_connect(control, "handle-stop_acquisition", G_CALLBACK(db_stopAcquisition), NULL);        // Connect the signal for stopping acquisition
+    g_signal_connect(control, "handle-set_interval", G_CALLBACK(db_setInterval), NULL);                // Connect the signal for setting interval
+    g_signal_connect(control, "handle-get_data", G_CALLBACK(db_getLastSpectrum), NULL);                // Connect the signal for getting data
+    g_signal_connect(control, "handle-stop_live", G_CALLBACK(db_stopLive), NULL);                      // Connect the signal for stopping live mode
+    g_signal_connect(control, "handle-exit", G_CALLBACK(db_exitMainLoop), NULL);                       // Connect the signal for exiting the application
 
-    pthread_t acqThread;
     pthread_create(&acqThread, NULL, handleAcquisitionLoop, NULL); // Create a thread for handling acquisition loop
-    control_set_live(control, TRUE);   // Initialize live status to TRUE
-    control_set_number_spectra(control, 0); // Initialize number of spectra to 0
-    control_set_data_path(control, outFile); // Set the data path in the control object
+    control_set_live(control, TRUE);                               // Initialize live status to TRUE
+    control_set_active(control, TRUE);                             // Set the control object as active
+    control_set_number_spectra(control, 0);                        // Initialize number of spectra to 0
+    control_set_data_path(control, outFile);                       // Set the data path in the control object
     printf("D-Bus name acquired successfully.\n");
     g_timeout_add_seconds(1, db_getTemperature, control);                                                           // Schedule next temperature check
-    g_timeout_add_seconds(1, db_updateNCaptures, control); // Schedule next update of number of captures
+    g_timeout_add_seconds(1, db_updateNCaptures, control);                                                          // Schedule next update of number of captures
     g_dbus_interface_skeleton_export(G_DBUS_INTERFACE_SKELETON(control), connection, "/hodr/server/Control", NULL); // Export the control interface on D-Bus
 }
 
+static gboolean db_activateHodr(Control *control, GDBusMethodInvocation *invocation, gpointer)
+{
+    if (andorActive) // Check if Andor SDK is already active
+    {
+        control_complete_activate(control, invocation, TRUE); // Complete the D-Bus method invocation with success
+        control_set_active(control, TRUE);                    // Set the control object as active
+        return TRUE;                                          // HODR is already active
+    }
+    pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
+    printf("Activating HODR...\n");
+    unsigned int result = hodr_init(hodr_cfg, andorFile, outFile, false); // Initialize HODR
+    if (result == DRV_SUCCESS)
+    {
+        andorActive = true;                                   // Set Andor SDK active flag to TRUE
+        control_set_active(control, TRUE);                    // Set the control object as active
+        control_complete_activate(control, invocation, TRUE); // Complete the D-Bus method invocation with success
+        printf("HODR activated successfully.\n");
+    }
+
+    pthread_create(&acqThread, NULL, handleAcquisitionLoop, NULL); // Create a thread for handling acquisition loop
+
+    pthread_mutex_unlock(&lock); // Unlock the mutex after activating HODR
+
+    return result;
+}
+
+static gboolean db_deactivateHodr(Control *control, GDBusMethodInvocation *invocation, gpointer)
+{
+
+    if (!andorActive) // Check if Andor SDK is not active
+    {
+        control_complete_deactivate(control, invocation, TRUE); // Complete the D-Bus method invocation with success
+        control_set_active(control, FALSE);                     // Set the control object as inactive
+        return TRUE;                                            // HODR is not active
+    }
+    pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
+    printf("Deactivating HODR...\n");
+    CancelWait();                        // Cancel any ongoing wait operations
+    AbortAcquisition();                  // Abort any ongoing acquisition
+    unsigned int result = hodr_deinit(); // Deinitialize HODR
+    if (result != DRV_SUCCESS)
+    {
+        g_dbus_method_invocation_return_error(invocation, G_IO_ERROR, G_IO_ERROR_FAILED, "Failed to deactivate HODR: %d", result); // Return error response
+        pthread_mutex_unlock(&lock);                                                                                               // Unlock the mutex before returning
+        return FALSE;                                                                                                              // Error deactivating HODR
+    }
+    andorActive = false;                                    // Set Andor SDK active flag to FALSE
+    control_complete_deactivate(control, invocation, TRUE); // Complete the D-Bus method invocation
+    control_set_active(control, FALSE);                     // Set the control object as inactive
+    pthread_mutex_unlock(&lock);                            // Unlock the mutex after deactivating HODR
+    printf("HODR deactivated successfully.\n");
+    return TRUE; // Successfully deactivated HODR
+}
+
+static gboolean db_resetHodr(Control *control, GDBusMethodInvocation *invocation, gpointer)
+{
+    pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
+    printf("Resetting HODR...\n");
+    if (andorActive)
+    {
+        CancelWait();                        // Cancel any ongoing wait operations
+        AbortAcquisition();                  // Abort any ongoing acquisition
+        unsigned int result = hodr_deinit(); // Deinitialize HODR
+        if (result != DRV_SUCCESS)
+        {
+            control_complete_reset(control, invocation, FALSE); // Complete the D-Bus method invocation with failure
+            pthread_mutex_unlock(&lock);                        // Unlock the mutex before returning
+            return FALSE;                                       // Error resetting HODR
+        }
+        andorActive = false;                // Set Andor SDK active flag to FALSE
+        control_set_active(control, FALSE); // Set the control object as inactive
+    }
+
+    unsigned int initResult = hodr_init(hodr_cfg, andorFile, outFile, true); // Reinitialize HODR
+    if (initResult != DRV_SUCCESS)
+    {
+        control_complete_reset(control, invocation, FALSE); // Complete the D-Bus method invocation with failure
+        return FALSE;                                       // Error resetting HODR
+    }
+    andorActive = true; // Set Andor SDK active flag to TRUE
+
+    pthread_create(&acqThread, NULL, handleAcquisitionLoop, NULL); // Create a thread for handling acquisition loop
+
+    pthread_mutex_unlock(&lock);                       // Unlock the mutex after resetting HODR
+    control_complete_reset(control, invocation, TRUE); // Complete the D-Bus method invocation with success
+    control_set_active(control, TRUE);                 // Set the control object as active
+    return TRUE;                                       // Successfully reset HODR
+}
+
 static gboolean db_exitMainLoop(Control *control, GDBusMethodInvocation *invocation, gpointer)
-{   
+{
     pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
     printf("Exiting main loop...\n");
-    g_main_loop_quit(loop);                                  // Quit the main loop
-    //g_dbus_method_invocation_return_value(invocation, NULL); // Return success response
+    g_main_loop_quit(loop); // Quit the main loop
+    // g_dbus_method_invocation_return_value(invocation, NULL); // Return success response
     control_complete_exit(control, invocation); // Complete the D-Bus method invocation
-    pthread_mutex_unlock(&lock);                             // Unlock the mutex after quitting the loops
-    return TRUE;                                             // Successfully exited main loop
+    pthread_mutex_unlock(&lock);                // Unlock the mutex after quitting the loops
+    return TRUE;                                // Successfully exited main loop
 }
 
 static gboolean db_stopLive(Control *control, GDBusMethodInvocation *invocation, gpointer)
@@ -199,29 +286,40 @@ static gboolean db_stopLive(Control *control, GDBusMethodInvocation *invocation,
 
 static gboolean db_updateNCaptures(gpointer control)
 {
-
+    if (!andorActive) // Check if Andor SDK is active
+    {
+        printf("Andor SDK is not active. Skipping update of number of captures.\n");
+        return FALSE; // Do not update if Andor SDK is not active
+    }
     pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
     int status;
     unsigned int result = hodr_getStatus(&status); // Get the current status of HODR
-    if (result == DRV_SUCCESS){
+    if (result == DRV_SUCCESS)
+    {
         control_set_acquisition_status(control, status); // Set the acquisition status in the control object
     }
     control_set_number_spectra(control, nCapturedSpectra); // Update the number of captured spectra in the control object
-    pthread_mutex_unlock(&lock); // Unlock the mutex after updating
-    return TRUE; // Successfully updated number of captures
+    pthread_mutex_unlock(&lock);                           // Unlock the mutex after updating
+    return TRUE;                                           // Successfully updated number of captures
 }
-
 
 static gboolean db_setInterval(Control *control, GDBusMethodInvocation *invocation, gdouble interval, gpointer)
 {
+
+    if (!andorActive) // Check if Andor SDK is active
+    {
+        printf("Andor SDK is not active. Not setting interval.\n");
+        control_complete_set_interval(control, invocation, FALSE); // Complete the D-Bus method invocation with failure
+        return FALSE;                                              // Do not update if Andor SDK is not active
+    }
     printf("Setting interval to %.5f seconds...\n", (float)interval);
     pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
-    
+
     if (interval <= 0)
     {
         g_dbus_method_invocation_return_error(invocation, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Invalid interval: %.5f", (float)interval);
         pthread_mutex_unlock(&lock); // Unlock the mutex before returning
-        return FALSE; // Invalid interval
+        return FALSE;                // Invalid interval
     }
 
     unsigned int result = hodr_setKineticCycleTime((float)interval); // Set kinetic cycle time in HODR
@@ -230,48 +328,58 @@ static gboolean db_setInterval(Control *control, GDBusMethodInvocation *invocati
         control_complete_set_interval(control, invocation, FALSE); // Complete the D-Bus method invocation
         printf("Failed to set interval: %d\n", result);
         pthread_mutex_unlock(&lock); // Unlock the mutex before returning
-        return FALSE; // Error setting interval
+        return FALSE;                // Error setting interval
     }
     control_complete_set_interval(control, invocation, TRUE); // Complete the D-Bus method invocation
     printf("Interval set to %.5f seconds successfully.\n", (float)interval);
     pthread_mutex_unlock(&lock); // Unlock the mutex after setting the interval
-    return TRUE; // Successfully set interval
+    return TRUE;                 // Successfully set interval
 }
 static gboolean db_setAcquisitionMode(Control *control, GDBusMethodInvocation *invocation, guint32 mode, gpointer)
-{   
+{
+
+    if (!andorActive) // Check if Andor SDK is active
+    {
+        printf("Andor SDK is not active. Not setting acquisition mode.\n");
+        control_complete_set_acquisition_mode(control, invocation, FALSE); // Complete the D-Bus method invocation with failure
+        return FALSE;                                                      // Do not update if Andor SDK is not active
+    }
 
     printf("Setting acquisition mode to %d...\n", mode);
     pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
-    if (mode > 5) // Assuming valid modes are 0, 1, and 2
+    if (mode > 5)              // Assuming valid modes are 0, 1, and 2
     {
         g_dbus_method_invocation_return_error(invocation, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Invalid acquisition mode: %d", mode);
         pthread_mutex_unlock(&lock); // Unlock the mutex before returning
-        return FALSE; // Invalid acquisition mode
+        return FALSE;                // Invalid acquisition mode
     }
 
-    hodr_setAcquisitionMode((int)mode); // Set the acquisition mode in HODR
+    hodr_setAcquisitionMode((int)mode);                               // Set the acquisition mode in HODR
     control_complete_set_acquisition_mode(control, invocation, TRUE); // Set the acquisition mode in the control object
 
     printf("Acquisition mode set to %d successfully.\n", mode);
     pthread_mutex_unlock(&lock); // Unlock the mutex after setting acquisition mode
-    return TRUE; // Successfully set acquisition mode
+    return TRUE;                 // Successfully set acquisition mode
 }
-
 
 static gboolean db_getTemperature(gpointer control)
 {
 
+    if (!andorActive) // Check if Andor SDK is active
+    {
+        printf("Andor SDK is not active. Not getting temperature.\n");
+        return FALSE; // Do not update if Andor SDK is not active
+    }
     pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
     float currentTemp, targetTemp;
-    
-    unsigned int result = hodr_getCurrentTemperatureAndTargetTemperature(&currentTemp, &targetTemp); // Get current and target temperatures
 
+    unsigned int result = hodr_getCurrentTemperatureAndTargetTemperature(&currentTemp, &targetTemp); // Get current and target temperatures
 
     if (result != DRV_SUCCESS)
     {
         fprintf(stderr, "Failed to get current temperature: %d\n", result);
         pthread_mutex_unlock(&lock); // Unlock the mutex before returning
-        return TRUE; // Error getting temperature
+        return TRUE;                 // Error getting temperature
     }
 
     double currentTempDouble = (double)currentTemp; // Convert current temperature to double
@@ -283,16 +391,15 @@ static gboolean db_getTemperature(gpointer control)
     }
 
     int tempStatus;
-    hodr_getCurrentTemperatureStatus(&tempStatus);                      // Get current temperature status
+    hodr_getCurrentTemperatureStatus(&tempStatus);                     // Get current temperature status
     char tempStatusString[64];                                         // Buffer for temperature status string
     hodr_getTemperatureStatusString(tempStatus, tempStatusString, 64); // Get temperature status string
-    pthread_mutex_unlock(&lock);                                        // Unlock the mutex after getting temperature
+    pthread_mutex_unlock(&lock);                                       // Unlock the mutex after getting temperature
     // control_emit_temperature_status(control, currentTempDouble, tempStatusString, targetTempDouble); // Emit temperature status signal
     control_set_target_temperature(control, targetTempDouble); // Set target temperature in the control object
     control_set_temperature(control, currentTempDouble);       // Set current temperature in the control object
     control_set_temperature_status(control, tempStatusString); // Set temperature status in the control object
     gboolean live = control_get_live(control);                 // Get live status from the control object
-
 
     if (!live)
     {
@@ -306,6 +413,13 @@ static gboolean db_getTemperature(gpointer control)
 static gboolean db_setTemperature(Control *control, GDBusMethodInvocation *invocation, gint32 value, gpointer)
 {
 
+    if (!andorActive) // Check if Andor SDK is active
+    {
+        printf("Andor SDK is not active. Not setting temperature.\n");
+        g_dbus_method_invocation_return_error(invocation, G_IO_ERROR, G_IO_ERROR_FAILED, "Andor SDK is not active.");
+        return FALSE; // Do not update if Andor SDK is not active
+    }
+
     // get lock to ensure thread safety
     pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
     // cast unsigned guint to int
@@ -314,7 +428,7 @@ static gboolean db_setTemperature(Control *control, GDBusMethodInvocation *invoc
     { // Check if the temperature is within a valid range
         g_dbus_method_invocation_return_error(invocation, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Temperature out of range: %d", value);
         pthread_mutex_unlock(&lock); // Unlock the mutex before returning
-        return FALSE; // Invalid temperature
+        return FALSE;                // Invalid temperature
     }
 
     hodr_setTargetTemperature(value); // Set the target temperature in HODR
@@ -322,8 +436,8 @@ static gboolean db_setTemperature(Control *control, GDBusMethodInvocation *invoc
     float currentTemp, targetTemp;
     hodr_getCurrentTemperatureAndTargetTemperature(&currentTemp, &targetTemp); // Get current and target temperatures
     hodr_getCurrentTemperatureStatus(&value);                                  // Get current temperature status
-    char tempStatusString[64];                                          // Buffer for temperature status string
-    hodr_getTemperatureStatusString(value, tempStatusString, 64);             // Get temperature status string
+    char tempStatusString[64];                                                 // Buffer for temperature status string
+    hodr_getTemperatureStatusString(value, tempStatusString, 64);              // Get temperature status string
     control_set_target_temperature(control, targetTemp);                       // Set the target temperature in the control object
     control_set_temperature(control, currentTemp);                             // Set the current temperature in the control object
     control_set_temperature_status(control, tempStatusString);                 // Set the temperature status in the control object
@@ -336,6 +450,14 @@ static gboolean db_setTemperature(Control *control, GDBusMethodInvocation *invoc
 
 static gboolean db_startAcquisition(Control *control, GDBusMethodInvocation *invocation, gdouble integration_time, gdouble interval_time, guint mode, guint number, gpointer)
 {
+
+    if (!andorActive) // Check if Andor SDK is active
+    {
+        printf("Andor SDK is not active. Not starting acquisition.\n");
+        
+        control_complete_start_acquisition(control, invocation, 0); // Complete the D-Bus method invocation with failure
+        return FALSE; // Do not start acquisition if Andor SDK is not active
+    }
     printf("Starting acquisition with integration time: %.9f seconds\n", integration_time);
     printf("Waiting to acquire lock for starting acquisition...\n");
     pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
@@ -348,16 +470,16 @@ static gboolean db_startAcquisition(Control *control, GDBusMethodInvocation *inv
         control_set_integration_time_secs(control, integration_time); // Set integration time in the control object
     }
 
-
     if (mode > 5) // Assuming valid modes are 0, 1, and 2
     {
         g_dbus_method_invocation_return_error(invocation, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Invalid acquisition mode: %d", mode);
         pthread_mutex_unlock(&lock); // Unlock the mutex before returning
-        return FALSE; // Invalid acquisition mode
-    } else if (mode != 0)
+        return FALSE;                // Invalid acquisition mode
+    }
+    else if (mode != 0)
     {
         hodr_setAcquisitionMode((int)mode); // Set the acquisition mode in HODR
-        //control_set_acquisition_mode(control, mode); // Set the acquisition mode in the control object
+        // control_set_acquisition_mode(control, mode); // Set the acquisition mode in the control object
     }
 
     if (interval_time >= 0)
@@ -366,14 +488,12 @@ static gboolean db_startAcquisition(Control *control, GDBusMethodInvocation *inv
         hodr_setKineticCycleTime(interval_time); // Set kinetic cycle time in seconds
     }
 
-
     if (number > 0)
     {
         printf("Setting number of captures to %d.\n", number);
         hodr_setNumberKinetics(number); // Set the number of accumulations in HODR
-        //control_set_number_spectra(control, (uint32_t)number); // Set the number of accumulations in the control object
+        // control_set_number_spectra(control, (uint32_t)number); // Set the number of accumulations in the control object
     }
-
 
     printf("Starting acquisition...\n");
 
@@ -385,7 +505,7 @@ static gboolean db_startAcquisition(Control *control, GDBusMethodInvocation *inv
         pthread_mutex_unlock(&lock); // Unlock the mutex before returning
         printf("Unlocked mutex after failed acquisition start.\n");
         fflush(stdout);
-        return FALSE;                // Failed to start acquisition
+        return FALSE; // Failed to start acquisition
     }
 
     printf("Acquisition started successfully.\n");
@@ -394,17 +514,16 @@ static gboolean db_startAcquisition(Control *control, GDBusMethodInvocation *inv
     //  generate a new spectrum ID
     uint32_t spectrumID = nTriggeredSpectra++; // Increment the captured spectra count to generate a new spectrum ID
 
-    pthread_mutex_unlock(&lock);                 // Unlock the mutex after starting acquisition
+    pthread_mutex_unlock(&lock); // Unlock the mutex after starting acquisition
     printf("Unlocked mutex after starting acquisition.\n");
     printf("New spectrum ID generated: %u\n", spectrumID);
 
     control_complete_start_acquisition(control, invocation, spectrumID); // Complete the D-Bus method invocation
-    
+
     // printf("Data waiting loop started with function reference: %u\n", dataWaitFunctionRef);
     // printf("Initiated data waiting loop.\n");
     return TRUE; // Successfully started acquisition
 }
-
 
 static gboolean db_stopAcquisition(Control *control, GDBusMethodInvocation *invocation, gpointer)
 {
@@ -424,9 +543,8 @@ static gboolean db_stopAcquisition(Control *control, GDBusMethodInvocation *invo
     control_complete_stop_acquisition(control, invocation); // Complete the D-Bus method invocation
     pthread_mutex_unlock(&lock);                            // Unlock the mutex after aborting acquisition
     printf("Unlocked mutex after stopping acquisition.\n");
-    return TRUE;                                           // Successfully stopped acquisition
+    return TRUE; // Successfully stopped acquisition
 }
-
 
 static gboolean db_getLastSpectrum(Control *control, GDBusMethodInvocation *invocation, guint ref, gpointer)
 {
@@ -437,10 +555,10 @@ static gboolean db_getLastSpectrum(Control *control, GDBusMethodInvocation *invo
     {
         g_dbus_method_invocation_return_error(invocation, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "No spectra captured yet.");
 
-        return FALSE;                // No spectra captured yet
+        return FALSE; // No spectra captured yet
     }
 
-    //Get last line from the data file
+    // Get last line from the data file
 
     printf("Waiting to acquire lock for reading data file...\n");
     fflush(stdout);
@@ -453,16 +571,16 @@ static gboolean db_getLastSpectrum(Control *control, GDBusMethodInvocation *invo
     {
         g_dbus_method_invocation_return_error(invocation, G_IO_ERROR, G_IO_ERROR_FAILED, "Failed to open data file: %s", outFile);
         pthread_mutex_unlock(&dataFileLock); // Unlock the mutex before returning
-        pthread_mutex_unlock(&lock); // Unlock the main lock before returning
+        pthread_mutex_unlock(&lock);         // Unlock the main lock before returning
         printf("Failed to open data file: %s\n", outFile);
         printf("Unlocked mutex after failed file open.\n");
         fflush(stdout);
-        return FALSE; // Error opening data file   
+        return FALSE; // Error opening data file
     }
 
-    char line[8192]; // Buffer for reading lines from the file
+    char line[8192];     // Buffer for reading lines from the file
     char nextLine[8192]; // Buffer for the next line
-    int nLines = 0; // Counter for the number of lines read
+    int nLines = 0;      // Counter for the number of lines read
     while (fgets(line, sizeof(line), file) != NULL)
     {
         nLines++; // Increment the line counter
@@ -471,21 +589,16 @@ static gboolean db_getLastSpectrum(Control *control, GDBusMethodInvocation *invo
         nextLine[sizeof(nextLine) - 1] = '\0'; // Ensure null termination
     }
 
-    fclose(file); // Close the file after reading
+    fclose(file);                        // Close the file after reading
     pthread_mutex_unlock(&dataFileLock); // Unlock the mutex after reading the data file
     printf("Unlocked mutex after reading data file.\n");
     printf("Read %d lines from the data file.\n", nLines); // Log the number of lines read
     fflush(stdout);
 
-
-
-
-
     // second token is timestamp, convert from string to unix timestamp
     printf("Parsing timestamp...\n");
-    
 
-    //First token is spectrum ID, ignore it
+    // First token is spectrum ID, ignore it
     char token[64];
 
     char *firstToken = strtok(line, ","); // Get the first token (spectrum ID)
@@ -499,9 +612,7 @@ static gboolean db_getLastSpectrum(Control *control, GDBusMethodInvocation *invo
     char *timeToken = strtok(NULL, ",");
 
     printf("Time token: %s\n", timeToken); // Log the time token
-    strcpy(token, timeToken); // Copy the token to a buffer
-
-
+    strcpy(token, timeToken);              // Copy the token to a buffer
 
     double exposureTimeDouble;
 
@@ -511,9 +622,8 @@ static gboolean db_getLastSpectrum(Control *control, GDBusMethodInvocation *invo
     char *exposureTimetoken = strtok(NULL, ",");
     strcpy(token, exposureTimetoken); // Copy the token to a buffer
 
-
     exposureTimeDouble = atof(token);
-    
+
     printf("Exposure time parsed: %.5f seconds\n", exposureTimeDouble); // Log the parsed exposure time
 
     printf("Parsing temperature...\n");
@@ -523,9 +633,8 @@ static gboolean db_getLastSpectrum(Control *control, GDBusMethodInvocation *invo
     char *temperatureToken = strtok(NULL, ",");
 
     printf("Temperature token: %s\n", temperatureToken); // Log the temperature token
-    strcpy(token, temperatureToken); // Copy the token to a buffer
-    
-    
+    strcpy(token, temperatureToken);                     // Copy the token to a buffer
+
     temperatureDouble = atof(token);
     printf("Temperature parsed: %.2f degrees Celsius\n", temperatureDouble); // Log the parsed temperature
 
@@ -539,12 +648,12 @@ static gboolean db_getLastSpectrum(Control *control, GDBusMethodInvocation *invo
     // int32_t dataArray[xpixels]; // Array to hold data values
     // int dataArrayCount = 0; // Count of data values
 
-        // Get the rest of the line and split by comma
+    // Get the rest of the line and split by comma
     char *dataToken;
     int dataCount = 0; // Count of data values
     while ((dataToken = strtok(NULL, ",")) != NULL)
     {
-        dataCount++; // Increment the data count
+        dataCount++;                                    // Increment the data count
         int32_t dataValue = (int32_t)atoi(dataToken);   // Convert the token to an integer
         g_variant_builder_add(builder, "i", dataValue); // Add the integer to the GVariant builder
     }
@@ -560,160 +669,8 @@ static gboolean db_getLastSpectrum(Control *control, GDBusMethodInvocation *invo
     printf("Completing D-Bus method invocation...\n");
     control_complete_get_data(control, invocation, response); // Complete the D-Bus method invocation with the GVariant
 
-
-    
     return TRUE; // Successfully returned the last spectrum data
-
-
 }
-
-// static gboolean db_getData(Control *control, GDBusMethodInvocation *invocation, gint ref, gpointer)
-// {
-
-//     if (ref < 0)
-//     {
-//         ref = nCapturedSpectra - 1; // If ref is negative, use the last captured spectrum ID
-//     }
-
-//     if ((uint32_t)ref > nCapturedSpectra || ref < 0)
-//     {
-//         g_dbus_method_invocation_return_error(invocation, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Spectrum ID %d not found.", ref);
-//         printf("Spectrum ID %d not found.\n", ref); // Log the error
-//         return FALSE; // Spectrum ID not found
-//     }
-
-//     printf("Requesting data for spectrum ID: %d\n", ref); // Log the requested spectrum ID
-//     // open data file for reading
-//     printf("Waiting to acquire lock for reading data file...\n");
-//     pthread_mutex_lock(&dataFileLock); // Lock the mutex to ensure thread safety for file operations
-//     printf("Acquired lock for reading data file.\n");
-//     FILE *file = fopen(outFile, "r");
-//     if (file == NULL)
-//     {
-//         g_dbus_method_invocation_return_error(invocation, G_IO_ERROR, G_IO_ERROR_FAILED, "Failed to open data file: %s", outFile);
-//         pthread_mutex_unlock(&dataFileLock); // Unlock the mutex before returning
-//         printf("Failed to open data file: %s\n", outFile);
-//         printf("Unlocked mutex after failed file open.\n");
-//         fflush(stdout);
-//         return FALSE; // Error opening data file
-//     }
-
-//     bool found = false; // Flag to check if the spectrum ID was found
-
-//     char line[8192]; // Buffer for reading lines from the file
-//     // Read the file line by line, checking for the last spectrum ID
-
-  
-//     // GVariant *timestampVariant;
-//     // GVariant *exposureTimeVariant;
-//     // GVariant *temperatureVariant;
-//     // GVariant *dataArray;
-//     //check if the file is empty
-//     if (fgets(line, sizeof(line), file) == NULL)
-//     {
-//         g_dbus_method_invocation_return_error(invocation, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Data file is empty or spectrum ID %d not found.", ref);
-//         fclose(file); // Close the file before returning
-//         pthread_mutex_unlock(&dataFileLock); // Unlock the mutex before returning
-        
-//         printf("Data file is empty or spectrum ID %d not found.\n", ref); // Log the error
-//         printf("Unlocked mutex after empty file check.\n");
-//         fflush(stdout);
-//         return FALSE; // Data file is empty or spectrum ID not found
-//     }
-
-//     while (fgets(line, sizeof(line), file) != NULL)
-//     {
-
-        
-//         // get first token from line by splitting by comma
-//         char *token = strtok(line, ",");
-//         if (token != NULL)
-//         {
-//             int32_t spectrumID = (int32_t)atoi(token); // Convert the first token to an unsigned integer
-//             if (spectrumID == ref)
-//             { // Check if the spectrum ID matches the requested one
-//                 // Create a GVariant to hold the data
-
-//                 printf("Found spectrum ID %u in data file.\n", ref); // Log the found spectrum ID
-
-//                 // Get the rest of the line and split by comma
-//                 char *dataToken;
-
-//                 // second token is timestamp, convert from string to unix timestamp
-//                 printf("Parsing timestamp...\n");
-//                 token = strtok(NULL, ",");
-//                 char timeStampChar[64];
-
-//                 strncpy(timeStampChar, token, sizeof(timeStampChar) - 1); // Copy the timestamp string
-//                 timeStampChar[sizeof(timeStampChar) - 1] = '\0';          // Ensure null termination
-
-
-
-//                 double exposureTimeDouble;
-
-//                 // third token is exposure time as float.
-//                 printf("Parsing exposure time...\n");
-//                 // convert from string to float then multiply by 1e9 to convert to nanoseconds
-//                 token = strtok(NULL, ",");
-
-//                 exposureTimeDouble = atof(token);
-                
-
-//                 printf("Parsing temperature...\n");
-//                 double temperatureDouble;
-
-//                 // fourth token is temperature as float
-//                 token = strtok(NULL, ",");
-                
-                
-//                 temperatureDouble = atof(token);
-                
-
-//                 printf("Initializing GVariant builder...\n");
-//                 GVariantBuilder *builder;
-//                 builder = g_variant_builder_new(G_VARIANT_TYPE("ai")); // Create a new GVariant builder for an array of integers
-
-//                 printf("Parsing data values...\n");
-//                 // remaining tokens are data values, split by comma
-
-//                 // int32_t dataArray[xpixels]; // Array to hold data values
-//                 // int dataArrayCount = 0; // Count of data values
-//                 while ((dataToken = strtok(NULL, ",")) != NULL)
-//                 {
-//                     int32_t dataValue = (int32_t)atoi(dataToken);   // Convert the token to an integer
-//                     g_variant_builder_add(builder, "i", dataValue); // Add the integer to the GVariant builder
-//                 }
-
-//                 // g_dbus_method_invocation_return_value(invocation, value); // Return the GVariant as the response
-
-//                 printf("Creating response GVariant...\n");
-//                 GVariant *response;
-//                 response = g_variant_new("(sddai)", timeStampChar, exposureTimeDouble, temperatureDouble, builder); // Create a response GVariant with timestamp, exposure time, temperature, and data array
-
-
-                
-//                 printf("Completing D-Bus method invocation...\n");
-//                 control_complete_get_data(control, invocation, response); // Complete the D-Bus method invocation with the GVariant
-
-//                 found = true; // Set flag to indicate spectrum ID was found
-//                 break;        // Exit the loop since we found the spectrum ID
-//             }
-//         }
-//     }
-
-//     if (!found)
-//     {
-//         g_dbus_method_invocation_return_error(invocation, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Spectrum ID %u not found in data file.", ref); // Return error if spectrum ID was not found
-//     }
-
-
-
-//     fclose(file); // Close the file 
-//     pthread_mutex_unlock(&dataFileLock); // Unlock the mutex after processing
-//     printf("Unlocked mutex after reading data file.\n");
-//     fflush(stdout); // Flush the output buffer to ensure all logs are printed
-//     return found ? TRUE : FALSE; // Return TRUE if spectrum ID was found, otherwise FALSE
-// }
 
 int createDataFile(char *directory, char *filename)
 {
@@ -786,20 +743,33 @@ int appendToFile(const char *filename, int spectrumID, float *exposureTime, doub
     return 0;
 }
 
-
-void* handleAcquisitionLoop()  // Function to handle the acquisition loop
+void *handleAcquisitionLoop() // Function to handle the acquisition loop
 {
 
-
+    if (!andorActive) // Check if Andor SDK is active
+    {
+        fprintf(stderr, "Andor SDK is not active. Cannot handle acquisition loop.\n");
+        return NULL; // Do not proceed if Andor SDK is not active
+    }
     unsigned int result;
     unsigned int acquisitionStatus = 0; // Variable to hold acquisition status
     printf("Handling acquisition loop...\n");
 
     while (true)
     {
+        if (!andorActive) // Check if Andor SDK is still active
+        {
+            printf("Andor SDK is not active. Exiting acquisition loop.\n");
+            break; // Exit the loop if Andor SDK is not active
+        }
         printf("Waiting for next acquisition to finish...\n");
         acquisitionStatus = WaitForAcquisition(); // Start waiting for acquisition data
-        
+
+        if (!andorActive) // Check if Andor SDK is still active after waiting
+        {
+            printf("Andor SDK is not active. Exiting acquisition loop.\n");
+            break; // Exit the loop if Andor SDK is not active
+        }
         if (acquisitionStatus != DRV_SUCCESS)
         {
             fprintf(stderr, "Acquisition Wait cancelled.\n");
@@ -809,38 +779,30 @@ void* handleAcquisitionLoop()  // Function to handle the acquisition loop
         printf("Num spectra triggered: %d\n", nTriggeredSpectra);
         printf("Num spectra captured: %d\n", nCapturedSpectra);
         printf("Acquisition %d complete.\n", nCapturedSpectra);
-        
+
         printf("Waiting to acquire lock for processing acquired data...\n");
         pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
         printf("Acq. %d: Acquired lock for processing acquired data.\n", nCapturedSpectra);
-        
-        int32_t data[xpixels]; // Array to hold the acquired data
-        
 
-        
+        int32_t data[xpixels]; // Array to hold the acquired data
+
         result = hodr_getMostRecentImage(data, (size_t)xpixels); // Get the most recent image acquired
 
         if (result != DRV_SUCCESS)
         {
             fprintf(stderr, "Error getting images: %d\n", result);
             pthread_mutex_unlock(&lock); // Unlock the mutex before returning
-            continue; // Skip to the next iteration if there was an error
+            continue;                    // Skip to the next iteration if there was an error
         }
-
 
         printf("Acq. %d: Acquired data for spectrum. Result: %d\n", nCapturedSpectra, result);
         float exposureTime, kineticCycleTime, readoutTime;
         hodr_getAcquisitionTimings(&exposureTime, &kineticCycleTime, &readoutTime); // Get acquisition timings
         printf("Acq. %d: Acquisition timings - Exposure: %.6f, Kinetic Cycle: %.6f, Readout: %.6f\n", nCapturedSpectra, exposureTime, kineticCycleTime, readoutTime);
-        
-        
 
         printf("Acq. %d: Last temperature: %.2f\n", nCapturedSpectra, lastTemperature); // Log the last temperature
 
-
-
         result = appendToFile(outFile, nCapturedSpectra++, &exposureTime, &lastTemperature, data, xpixels); // Append data to output file
-
 
         printf("Data appended to file. Result: %d, N captured spectra: %d\n", result, nCapturedSpectra);
         pthread_mutex_unlock(&lock); // Unlock the mutex after processing
@@ -848,5 +810,4 @@ void* handleAcquisitionLoop()  // Function to handle the acquisition loop
     }
 
     return NULL; // Return NULL to indicate the thread has finished
-
 }

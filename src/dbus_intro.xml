@@ -1,10 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <node name="/" xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
     <interface name="hodr.server.Control">
-        <method name="set_temperature">
-            <arg name="temperature" type="i" direction="in" />
-            <arg name="result" type="b" direction="out" />
-        </method>
+
         <property name="Live" type="b" access="readwrite" />
         <property name="TimerSet" type="b" access="readwrite" />
 
@@ -15,8 +12,25 @@
         <property name="acquisitionStatus" type="i" access="read" />
         <property name="acquisitionMode" type="u" access="read" />
         <property name="dataPath" type="s" access="read" />
-        <property name="dataReady" type="b" access="read" />
         <property name="numberSpectra" type="u" access="read" />
+        <property name="active" type="b" access="read" />
+
+        <method name="activate">
+            <arg name="result" type="b" direction="out" />
+        </method>
+        <method name="deactivate">
+            <arg name="result" type="b" direction="out" />
+        </method>
+
+        <method name="reset">
+            <arg name="result" type="b" direction="out" />
+        </method>
+
+        <method name="set_temperature">
+            <arg name="temperature" type="i" direction="in" />
+            <arg name="result" type="b" direction="out" />
+        </method>
+
         <method name="set_acquisition_mode">
             <arg name="mode" type="u" direction="in" />
             <arg name="result" type="b" direction="out" />
@@ -37,26 +51,14 @@
             <arg name="n_captures" type="u" direction="in" />
             <arg name="ref" type="u" direction="out" />
         </method>
-        
-        <method name="stop_acquisition"/>
+
+        <method name="stop_acquisition" />
 
         <method name="get_data">
             <arg name="ref" type="i" direction="in" />
             <arg name="data" type="(sddai)" direction="out" />
         </method>
-        <method name="stop_live"/>
-        <method name="exit"/>
-        <signal name="DataReady">
-            <arg name="ref" type="u" />
-        </signal>
-        <signal name="TemperatureStatusChanged">
-            <arg name="temperature" type="d" />
-            <arg name="temperature_status" type="s" />
-        </signal>
-        <signal name="TemperatureStatus">
-            <arg name="temperature" type="d" />
-            <arg name="temperature_status" type="s" />
-            <arg name="target_temperature" type="d" />
-        </signal>
+        <method name="stop_live" />
+        <method name="exit" />
     </interface>
 </node>

@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>HODR</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div id="top-bar">
+        <div id="logo-container">
+            <div id="logo-graphics">
+                <div id="logo-colours">
+                    <div id="l1" class="logo-vert"></div>
+                    <div id="l2" class="logo-vert"></div>
+                    <div id="l3" class="logo-vert"></div>
+                    <div id="l4" class="logo-vert"></div>
+                    <div id="l5" class="logo-vert"></div>
+                </div>
+                <div id="boat">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="40" height="40">
+                        <path d="M50 20 C 52 65, 60 80, 70 90 C 60 100, 40 100, 30 90 C 40 80, 48 65, 50 20 Z"
+                            fill="#ffffff" />
+                    </svg>
+                </div>
+            </div>
+            <span id="logo-text">HODR</span>
+        </div>
+        <div id="power-button">
+            <button id="power-button-icon" class="unknown">&#x23FB;</button>
+
+        </div>
+    </div>
+    <div id="main-content">
+        <div id="temp-area">
+            <div id="chart-container">
+                <canvas id="temp-chart" class="chart"></canvas>
+            </div>
+            <div id="temp-bar">
+                <span id="temp-status"><span id="current-temp-status">-</span></span>
+                <span id="temp-live"><span id="current-temp">-</span><span class="temp-unit">°C</span></span>
+                <span id="target-temp">Target: <span id="current-target-temp">-</span><span
+                        class="temp-unit">°C</span></span>
+                <span id="temp-time">Last Updated: <span id="last-updated">-</span></span>
+                <div id="set-temp-container">
+                    <span>Set Target Temperature:</span>
+                    <input type="number" id="set-temp-input" placeholder="" max="20" min="-120" />
+                    <span class="temp-unit">°C</span>
+                    <button id="set-temp-button">Set</button>
+                </div>
+            </div>
+        </div>
+        <div id="spectrum-area">
+
+            <div id="spectrum-bar">
+                <div id="acquisition-options-container">
+                    <div id="acquisition-mode-container" class="acq-option" data-tip="Select the acquisition mode">
+                        <span>Acquisition Mode:</span>
+                        <select id="acquisition-mode-select">
+                            <option value="single">Single Capture</option>
+                            <option value="series">Series</option>
+                            <option value="continuous">Continuous</option>
+                            <option value="continuous-auto">Continuous Auto</option>
+                        </select>
+                    </div>
+                    <div class="acq-option" id="series-length-container"
+                        data-tip="Number of images to capture in a series">
+                        <span>Series Length:</span>
+                        <input id="series-length-input" type="number" min="1" max="1000" value="10" />
+                    </div>
+                    <div class="acq-option" id="series-interval-container"
+                        data-tip="Interval between image captures in seconds">
+                        <span>Series Interval (s):</span>
+                        <input id="series-interval-input" type="number" min="0" max="60" value="1.0" />
+                    </div>
+                    <div data-tip="Integration time in seconds" class="acq-option" id="integration-time-container">
+                        <span>Integration Time (s):</span>
+                        <input id="int-time-input" type="number" min="0" max="10" />
+                    </div>
+                    <div class="acq-option" id="target-intensity" data-tip="Target intensity for automatic acquisition">
+                        <span>Target Intensity:</span>
+                        <input id="target-intensity-input" type="number" min="1" max="65530" value="60000" />
+
+                    </div>
+                </div>
+                <span id="spectrum-status">HODR Status: <span id="current-spectrum-status">-</span></span>
+                <div id="spectrum-info">
+
+                    <div class="spectrum-info-item">
+                        <span id="spectrum-time">Timestamp: </span>
+                        <div class="info-value">
+                            <span id="last-spectrum-updated">-</span>
+                        </div>
+                    </div>
+                    <div class="spectrum-info-item">
+                        <span id="int-time">Integration Time:</span>
+                        <div class="info-value">
+                            <span id="integration-time">-</span>
+                            <span>s</span>
+                        </div>
+                    </div>
+                    <div class="spectrum-info-item">
+                        <span id="spectrum-temp">Temperature:</span>
+                        <div class="info-value">
+                            <span id="spectrum-temperature">-</span>
+                            <span>°C</span>
+                        </div>
+                    </div>
+                    <div class="spectrum-info-item">
+                        <span id="n-spectra">Number of Spectra: </span>
+                        <div class="info-value">
+                            <span id="n-spectra-count">-</span>
+                        </div>
+                    </div>
+                </div>
+                <a id="spectrum-capture-button">Capture</a>
+
+            </div>
+            <div id="spectrum-chart-container">
+                <canvas id="spectrum-chart" class="chart"></canvas>
+            </div>
+            <div id="buttons">
+
+                <a id="download-button" href="data" download="spectrum_data.csv">&#128427;</a>
+            </div>
+        </div>
+
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script>
+            const data = [];
+            const targetTemps = [];
+            const timestamps = [];
+            var powerON = false;
+            var quickAdjustmentMode = false;
+            Chart.defaults.backgroundColor = '#333';
+            Chart.defaults.borderColor = '#aaaaaa';
+            Chart.defaults.color = '#ffffff';
+            var spectrumReference;
+            const ctx = document.getElementById('temp-chart');
+            const tempChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Temperature',
+                        data: [],
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                        fill: false,
+                        tension: 0.1
+                    },
+                    {
+                        label: 'Target Temperature',
+                        data: [],
+                        borderColor: 'rgba(255, 99, 132, 1)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                        fill: false,
+                        borderDash: [5, 5],
+                        tension: 0.1
+                    }]
+                },
+
+
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    annotation: {
+                        annotations: []
+                    },
+                    scales: {
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Temperature (°C)'
+                            }
+                        }
+
+                    }
+
+                }
+
+            });
+
+
+            const spectrumCtx = document.getElementById('spectrum-chart');
+
+            const spectrumChart = new Chart(spectrumCtx, {
+                type: 'line',
+
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Spectrum',
+                        data: [],
+                        borderColor: 'rgba(153, 102, 255, 1)',
+                        backgroundColor: 'rgba(153, 102, 255, 0.2)',
+                        fill: false,
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Intensity'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Wavelength (nm)'
+                            }
+                        }
+                    }
+                }
+            });
+
+            function checkON() {
+                console.log('Checking power status...');
+                fetch('power_status')
+                    .then(response => response.text())
+                    .then(status => {
+                        console.log('Power status:', status);
+                        if (status.trim() === 'ON') {
+                            powerON = true;
+                            document.getElementById('power-button-icon').classList.remove('off');
+                            document.getElementById('power-button-icon').classList.add('on');
+                        } else {
+                            powerON = false;
+                            document.getElementById('power-button-icon').classList.remove('on');
+                            document.getElementById('power-button-icon').classList.add('off');
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error checking power status:', error)
+                        document.getElementById('power-button-icon').classList.remove('on');
+                        document.getElementById('power-button-icon').classList.remove('off');
+                        document.getElementById('power-button-icon').classList.add('unknown');
+                        document.getElementById('power-button-icon').textContent = 'Unknown';
+                    });
+
+            }
+
+
+            function getTemp() {
+
+                if (!powerON) {
+                    console.warn('Power is OFF. Skipping temperature fetch.');
+                    return;
+                }
+                const time = new Date();
+                console.log('Fetching temperature data at:', time.toLocaleTimeString());
+                var result = fetch('temperature')
+                    .then(response => {
+
+
+                        return response.text()
+                    }).then(tempResponse => {
+                        console.log('Raw temperature data:', tempResponse);
+                        const temperature = parseFloat(tempResponse);
+                        if (isNaN(temperature)) {
+                            console.error('Invalid temperature data:', tempResponse);
+                            return;
+                        }
+
+                        const temp = temperature.toFixed(2);
+                        console.log('Current temperature:', temp);
+                        timestamps.push(time);
+                        data.push(temp);
+
+                        if (data.length > 20) {
+                            data.shift();
+                            timestamps.shift();
+
+                        }
+
+                        tempChart.data.labels = timestamps.map(t => t.toLocaleTimeString());
+                        tempChart.data.datasets[0].data = data;
+
+
+                        tempChart.update();
+                        document.getElementById('current-temp').textContent = temp;
+                        document.getElementById('last-updated').textContent = time.toLocaleTimeString();
+                    })
+                    .catch(error => console.error('Error fetching temperature data:', error));
+
+                result = fetch('target_temperature')
+                    .then(response => response.text())
+                    .then(targetTempResponse => {
+                        const targetTemperature = parseFloat(targetTempResponse);
+                        if (isNaN(targetTemperature)) {
+                            console.error('Invalid target temperature data:', targetTempResponse);
+                            return;
+                        }
+
+                        const targetTemp = targetTemperature.toFixed(2);
+                        console.log('Current target temperature:', targetTemp);
+                        targetTemps.push(targetTemp);
+
+                        if (targetTemps.length > 20) {
+                            targetTemps.shift();
+                        }
+                        tempChart.data.datasets[1].data = targetTemps;
+
+                        tempChart.update();
+                        document.getElementById('current-target-temp').textContent = targetTemp;
+                        document.getElementById('last-updated').textContent = time.toLocaleTimeString();
+                    })
+                    .catch(error => console.error('Error fetching target temperature data:', error));
+
+                result = fetch('temperature_status')
+                    .then(response => response.text())
+                    .then(statusResponse => {
+                        const status = statusResponse.trim().replace(/['"]+/g, '');
+                        console.log('Current temperature status:', status);
+                        document.getElementById('last-updated').textContent = time.toLocaleTimeString();
+
+                        if (status === 'Temperature not reached') {
+                            // document.getElementById('spectrum-capture-button').disabled = true;
+                            document.getElementById('current-temp-status').className = 'not-reached';
+                            document.getElementById('current-temp-status').innerHTML = 'Not Reached';
+                        } else if (status === 'Temperature not stabilized') {
+                            //document.getElementById('spectrum-capture-button').disabled = true;
+                            document.getElementById('current-temp-status').className = 'not-stabilized';
+                            document.getElementById('current-temp-status').innerHTML = 'Stabilizing';
+                        } else if (status === 'Temperature stabilized') {
+                            //document.getElementById('spectrum-capture-button').disabled = false;
+                            document.getElementById('current-temp-status').className = 'stabilized';
+                            document.getElementById('current-temp-status').innerHTML = 'Stabilized';
+                        } else {
+                            //document.getElementById('spectrum-capture-button').disabled = true;
+                            document.getElementById('current-temp-status').className = '';
+                            document.getElementById('current-temp-status').innerHTML = status;
+                        }
+
+
+                    })
+                    .catch(error => console.error('Error fetching temperature status:', error));
+            }
+
+            var nSpectra = 0;
+
+            function getDataIfNew() {
+
+                if (!powerON) {
+                    console.warn('Power is OFF. Skipping data fetch.');
+                    return;
+                }
+                console.log('Checking for new spectrum data...');
+
+                fetch('number_spectra')
+                    .then(response => response.text())
+                    .then(numberSpectraResponse => {
+                        const numberSpectra = parseInt(numberSpectraResponse);
+
+                        document.getElementById('n-spectra-count').textContent = numberSpectra;
+                        if (numberSpectra > nSpectra) {
+                            nSpectra = numberSpectra;
+
+                            getData();
+                        } else {
+                            console.warn('No new spectrum data available.');
+                        }
+                    })
+                    .catch(error => console.error('Error checking for new spectrum data:', error));
+
+                fetch('acquisition_status')
+                    .then(response => response.text())
+                    .then(acquisitionStatusResponse => {
+                        const acquisitionStatus = parseInt(acquisitionStatusResponse);
+                        console.log('Acquisition status:', acquisitionStatusResponse);
+                        if (acquisitionStatus == 20073) {
+                            document.getElementById('spectrum-capture-button').textContent = 'Capture';
+                            document.getElementById('spectrum-capture-button').disabled = false;
+                            acquisitionInProgress = false;
+                            document.getElementById('current-spectrum-status').textContent = 'Idle...';
+
+                        } else if (acquisitionStatus == 20074) {
+                            document.getElementById('spectrum-capture-button').disabled = true;
+                            document.getElementById('current-spectrum-status').textContent = 'Temp Cycle in Progress...';
+
+                        } else if (acquisitionStatus == 20072) {
+                            document.getElementById('spectrum-capture-button').textContent = 'Stop';
+                            document.getElementById('spectrum-capture-button').disabled = false;
+                            document.getElementById('current-spectrum-status').textContent = 'Acquiring...';
+                            acquisitionInProgress = true;
+                        } else {
+                            document.getElementById('spectrum-capture-button').textContent = 'Capture';
+                            document.getElementById('spectrum-capture-button').disabled = false;
+                            document.getElementById('current-spectrum-status').textContent = `Unknown status: ${acquisitionStatus}`;
+                            acquisitionInProgress = false;
+                        }
+
+                        const mode = document.getElementById('acquisition-mode-select').value;
+                        if (mode === 'continuous-auto') {
+                            if (autoAcquisitionIntervalHandle) {
+                                document.getElementById('spectrum-capture-button').textContent = 'Stop';
+                                document.getElementById('current-spectrum-status').textContent += ' (Auto Mode)';
+                                document.getElementById('spectrum-capture-button').disabled = false;
+                                if (quickAdjustmentMode) {
+                                    document.getElementById('current-spectrum-status').textContent += ' (Quick Adjustment Mode)';
+                                }
+                            }
+                        }
+                    })
+                    .catch(error => console.error('Error checking acquisition status:', error));
+            }
+
+
+            function startQuickAdjustmentMode() {
+                console.log('Starting quick adjustment mode...');
+                quickAdjustmentMode = true;
+                if (autoAcquisitionIntervalHandle) {
+                    clearInterval(autoAcquisitionIntervalHandle);
+                    autoAcquisitionIntervalHandle = setInterval(() => {
+                        startAcquisition();
+                    }, 2000);
+                }
+
+            }
+
+            function stopQuickAdjustmentMode() {
+                console.log('Stopping quick adjustment mode...');
+                quickAdjustmentMode = false;
+                const interval = parseFloat(document.getElementById('series-interval-input').value);
+                if (autoAcquisitionIntervalHandle) {
+                    clearInterval(autoAcquisitionIntervalHandle);
+                    autoAcquisitionIntervalHandle = setInterval(() => {
+                        startAcquisition();
+                    }, interval * 1000);
+                }
+            }
+
+            function getData() {
+
+                console.log('Fetching spectrum data...');
+                fetch('get_spectrum', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ spectrum_id: spectrumReference })
+                })
+                    .then(response => response.json())
+                    .then(spectrumData => {
+                        console.log('Raw spectrum data:', spectrumData);
+
+                        if (!Array.isArray(spectrumData.data) || spectrumData.data.length === 0) {
+                            console.error('Invalid spectrum data:', spectrumData);
+                            return;
+                        }
+
+
+
+                        const wavelengths = spectrumData.data.map((_, index) => index + 1); // Assuming wavelengths are 1 to N
+                        const intensities = spectrumData.data;
+
+                        if (spectrumReference !== null) {
+                            spectrumChart.data.labels = wavelengths;
+                            spectrumChart.data.datasets[0].data = intensities;
+                            spectrumChart.update();
+
+                            document.getElementById('last-spectrum-updated').textContent = spectrumData.timestamp;
+                            document.getElementById('integration-time').textContent = `${spectrumData.integration_time.toFixed(5)}`;
+                            document.getElementById('spectrum-temperature').textContent = `${spectrumData.temperature.toFixed(2)}`;
+                        } else {
+                            console.error('No valid spectrum reference found.');
+                        }
+
+                        const mode = document.getElementById('acquisition-mode-select').value;
+                        if (mode === 'continuous-auto') {
+                            const targetIntensity = parseInt(document.getElementById('target-intensity-input').value);
+                            if (isNaN(targetIntensity) || targetIntensity < 1 || targetIntensity > 65530) {
+                                alert('Please enter a valid target intensity between 1 and 65530.');
+                                return;
+                            }
+                            const maxIntensity = Math.max(...intensities);
+
+
+                            console.log('Max intensity:', maxIntensity);
+                            var ratio = maxIntensity / targetIntensity;
+
+
+
+                            if (maxIntensity >= 65535) {
+                                ratio = ratio * 4;
+                            }
+
+                            // If the max intensity is too high or very low, speed up the interval to get closer to the target intensity
+                            // Return to normal interval if the max intensity is within a reasonable range
+                            const interval = parseFloat(document.getElementById('series-interval-input').value);
+
+                            var goToQuickAdjustmentMode = false;
+                            var exitQuickAdjustmentMode = false;
+
+                            if (quickAdjustmentMode) {
+                                if ((spectrumData.integration_time <= 0.00001 || ratio > 0.75)) {
+                                    stopQuickAdjustmentMode();
+                                }
+
+                            } else {
+                                if (maxIntensity < 65534 && ratio >= 0.75 && ratio < 1.25) {
+                                    goToQuickAdjustmentMode = false;
+                                } else if (spectrumData.integration_time <= 0.00001) {
+                                    goToQuickAdjustmentMode = false;
+                                } else if (spectrumData.integration_time > 0.00001 || (ratio < 0.75 || ratio >= 0.25)) {
+                                    startQuickAdjustmentMode();
+                                }
+                            }
+
+                            const integrationTime = Math.max(spectrumData.integration_time / ratio, 0.00001);
+                            document.getElementById('int-time-input').value = integrationTime.toFixed(5);
+                            console.log('Calculated integration time:', integrationTime);
+                        }
+
+
+
+                    })
+                    .catch(error => console.error('Error fetching spectrum data:', error));
+            }
+
+            var acquisitionInProgress = false;
+            function stopAcquisition() {
+                console.log('Stopping spectrum acquisition...');
+
+                const mode = document.getElementById('acquisition-mode-select').value;
+                if (mode === 'continuous-auto') {
+                    if (autoAcquisitionIntervalHandle) {
+                        clearInterval(autoAcquisitionIntervalHandle);
+                        autoAcquisitionIntervalHandle = null;
+                        document.getElementById('spectrum-capture-button').textContent = 'Capture';
+                    }
+                }
+
+                fetch('stop_acquisition')
+                    .then(response => response.text())
+                    .then(responseText => {
+                        acquisitionInProgress = false;
+                        document.getElementById('spectrum-capture-button').textContent = 'Capture';
+                        console.log('Stop acquisition response:', responseText);
+
+                    })
+                    .catch(error => console.error('Error stopping spectrum acquisition:', error));
+            }
+
+            var autoAcquisitionIntervalHandle;
+
+            function startAcquisition() {
+                console.log('Starting spectrum acquisition...');
+                var integrationTime = parseFloat(document.getElementById('int-time-input').value);
+                var seriesLength = parseInt(document.getElementById('series-length-input').value);
+                var seriesInterval = parseFloat(document.getElementById('series-interval-input').value);
+                var mode = document.getElementById('acquisition-mode-select').value;
+                console.log('Integration time:', integrationTime);
+                if (isNaN(integrationTime) || integrationTime <= 0) {
+                    integrationTime = 0.0;
+                }
+                fetch('start_acquisition', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        "integration_time": integrationTime,
+                        "interval_time": seriesInterval,
+                        "acquisition_mode": mode,
+                        "n_captures": seriesLength
+
+                    })
+                })
+                    .then(response => response.text())
+                    .then(responseText => {
+                        console.log('Start acquisition response:', responseText);
+                        spectrumReference = parseInt(responseText);
+                        acquisitionInProgress = true;
+                        if (mode !== 'single') {
+                            document.getElementById('spectrum-capture-button').textContent = 'Stop';
+                        } else {
+                            document.getElementById('spectrum-capture-button').disabled = true;
+                        }
+                        //document.getElementById('current-spectrum-status').textContent = 'Acquiring...';
+                        //document.getElementById('last-spectrum-updated').textContent = new Date().toLocaleTimeString();
+
+
+                    })
+                    .catch(error => console.error('Error starting spectrum acquisition:', error));
+
+
+
+            }
+
+
+
+
+
+
+
+
+
+
+            var getTempInterval;
+
+            document.addEventListener('DOMContentLoaded', () => {
+                getTemp(); // Initial fetch
+                getDataIfNew(); // Initial check for new spectrum data
+                getTempInterval = setInterval(() => {
+                    // TODO: code to cancel on user input
+                    getTemp();
+
+                    console.log('Fetching temperature data...');
+                },
+                    5000
+                );
+
+                getDataInterval = setInterval(() => {
+                    getDataIfNew();
+                    console.log('Checking for new spectrum data...');
+                }, 1000);
+
+                setInterval(() => {
+                    checkON();
+                    console.log('Checking power status...');
+                }, 1000);
+
+                document.getElementById('power-button-icon').addEventListener('click', () => {
+                    console.log('Power button clicked');
+                    if (powerON) {
+                        fetch('deactivate')
+                            .then(response => response.text())
+                            .then(responseText => {
+                                console.log('Power off response:', responseText);
+                                powerON = false;
+                                document.getElementById('power-button-icon').classList.remove('on');
+                                document.getElementById('power-button-icon').classList.add('off');
+                            })
+                            .catch(error => console.error('Error powering off:', error));
+                    } else {
+                        fetch('activate')
+                            .then(response => response.text())
+                            .then(responseText => {
+                                console.log('Power on response:', responseText);
+                                powerON = true;
+                                document.getElementById('power-button-icon').classList.remove('off');
+                                document.getElementById('power-button-icon').classList.add('on');
+                            })
+                            .catch(error => console.error('Error powering on:', error));
+                    }
+                });
+            });
+
+            function setTemp() {
+                const setTempInput = document.getElementById('set-temp-input');
+                const newTargetTemp = parseInt(setTempInput.value);
+                if (isNaN(newTargetTemp)) {
+                    alert('Please enter a valid temperature.');
+                    return;
+                }
+
+                if (newTargetTemp < -120 || newTargetTemp > 20) {
+                    alert('Temperature must be between -120°C and 20°C.');
+                    return;
+                }
+
+                fetch('set_target_temperature', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ target_temperature: newTargetTemp })
+                })
+                    .then(response => response.text())
+                    .then(responseText => {
+                        console.log('Set target temperature response:', responseText);
+                        setTempInput.value = ''; // Clear input field
+                        getTemp(); // Refresh data
+                    })
+                    .catch(error => console.error('Error setting target temperature:', error));
+            }
+
+            function validateTempInput() {
+                const input = document.getElementById('set-temp-input');
+                const value = parseInt(input.value);
+                if (isNaN(value) || value < -120 || value > 20) {
+                    input.setCustomValidity('Temperature must be between -120°C and 20°C.');
+                    document.getElementById('set-temp-button').disabled = true;
+                    console.log('Invalid temperature input:', value);
+                } else {
+                    input.setCustomValidity('');
+                    document.getElementById('set-temp-button').disabled = false;
+                    console.log('Valid temperature input:', value);
+                }
+            }
+
+            document.getElementById('set-temp-input').addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') {
+                    event.preventDefault(); // Prevent form submission
+                    setTemp();
+                    return;
+                }
+                // Allow only numbers, minus, backspace, and arrow keys
+                if (!/^[0-9-]$/.test(event.key) && event.key !== 'Backspace' && event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
+                    event.preventDefault();
+                }
+
+
+            });
+
+            function updateAcqOptionsFields() {
+                const mode = document.getElementById('acquisition-mode-select').value;
+                console.log('Updating acquisition options for mode:', mode);
+
+                if (mode === 'series') {
+                    document.getElementById('series-length-container').classList.remove('disabled');
+                } else {
+                    document.getElementById('series-length-container').classList.add('disabled');
+                }
+
+                if (mode == 'single') {
+                    document.getElementById('series-interval-container').classList.add('disabled');
+                } else {
+                    document.getElementById('series-interval-container').classList.remove('disabled');
+                }
+
+                if (mode === 'continuous-auto') {
+
+
+                    document.getElementById('target-intensity').classList.remove('disabled');
+                } else {
+                    document.getElementById('int-time-input').disabled = false;
+                    document.getElementById('target-intensity').classList.add('disabled');
+                }
+            }
+
+            document.getElementById('acquisition-mode-select').addEventListener('change', (event) => {
+
+                updateAcqOptionsFields();
+            });
+
+            updateAcqOptionsFields(); // Initial call to set fields based on default mode
+
+
+
+            document.getElementById('set-temp-input').addEventListener('input', validateTempInput);
+
+
+            document.getElementById('set-temp-button').addEventListener('click', () => {
+                setTemp();
+            });
+
+            document.getElementById('spectrum-capture-button').addEventListener('click', () => {
+                if (acquisitionInProgress && document.getElementById('acquisition-mode-select').value !== 'single') {
+                    stopAcquisition();
+                    return;
+                }
+
+                if (document.getElementById('acquisition-mode-select').value === 'continuous-auto') {
+                    if (autoAcquisitionIntervalHandle) {
+                        clearInterval(autoAcquisitionIntervalHandle);
+                        autoAcquisitionIntervalHandle = null;
+                        document.getElementById('spectrum-capture-button').textContent = 'Capture';
+                        return;
+                    } else {
+                        const interval = parseFloat(document.getElementById('series-interval-input').value);
+                        autoAcquisitionIntervalHandle = setInterval(() => {
+                            startAcquisition();
+                        }, interval * 1000);
+                    }
+                }
+                startAcquisition();
+            });
+
+
+
+
+        </script>
+
+</body>
+
+</html>
