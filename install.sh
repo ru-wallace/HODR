@@ -28,7 +28,7 @@ FOUND_DIR=$(find "$MINIFORGE_DIR/pkgs/" -type d -name "andor2-sdk-*" 2>/dev/null
 if [ -n "$FOUND_DIR" ]; then
     ANDOR_DIR="$FOUND_DIR"
     echo "Found Andor2 SDK in: $ANDOR_DIR"
-    echo "ANDOR_DIR=${ANDOR_DIR}" >> "$BASE_DIR/config.mk"
+    sudo -u $SUDO_USER echo "ANDOR_DIR=${ANDOR_DIR}" >> "$BASE_DIR/config.mk"
 else
 
     echo "Andor2 SDK not found. Please ensure it is installed in the Miniforge3 directory."
@@ -56,8 +56,10 @@ echo "UDEV rules reloaded"
 
 echo "Please unplug and replug the device for the changes to take effect."
 
+
+
 echo "Building DBus headers using dbus-codegen..."
-make dbus > /dev/null 2>&1
+sudo -u $SUDO_USER make dbus > /dev/null 2>&1
 
 if [ $? -ne 0 ]; then
     echo "Failed to build dbus. Please check the output for errors."
@@ -69,7 +71,7 @@ fi
 echo "DBus headers built successfully."
 
 echo "Building the project..."
-make
+sudo -u $SUDO_USER make 
 
 
 
