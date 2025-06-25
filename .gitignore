@@ -4,3 +4,9 @@ hodr
 *.a
 *.so
 control.*
+
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.pdb
