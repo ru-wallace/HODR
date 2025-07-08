@@ -5,8 +5,8 @@ After=dbus.service network.target
 [Service]
 Type=dbus
 BusName=hodr.server.Control
-WorkingDirectory=/home/ru/HODR
-ExecStart=/home/ru/HODR/hodr
+WorkingDirectory=%h/HODR
+ExecStart=%h/HODR/hodr
 Restart=on-failure
 RestartSec=5
 
