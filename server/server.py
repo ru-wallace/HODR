@@ -14,17 +14,27 @@ script_dir = __file__.rsplit('/', 1)[0]
 
 
 class RequestHandler(BaseHTTPRequestHandler):
+
+
+
+
     def do_GET(self):
+
+        self.content_type = 'text/html'
         global proxy
         proxy= Gio.DBusProxy.new_sync(session_bus, Gio.DBusProxyFlags.NONE, None,
                                 'hodr.server.Control',
                                 '/hodr/server/Control',
                                 'hodr.server.Control', None)
         
+        
+
+
         print(f"Received request for: {self.path}")
         if self.path == '/' or self.path == '/index.html':
             self.serve_index()
         elif self.path == '/favicon.ico':
+            self.content_type = 'image/x-icon'
             print("Serving favicon.ico")
             self.send_response(200)
             self.send_header('Content-type', 'image/x-icon')
@@ -32,12 +42,16 @@ class RequestHandler(BaseHTTPRequestHandler):
             with open(f'{script_dir}/www/favicon.ico', 'rb') as f:
                 self.wfile.write(f.read())
         elif self.path == '/style.css':
+            self.content_type = 'text/css'
             print("Serving style.css")
             self.send_response(200)
             self.send_header('Content-type', 'text/css')
             self.end_headers()
             with open(f'{script_dir}/www/style.css', 'rb') as f:
                 self.wfile.write(f.read())
+        elif self.path == '/status':
+            print("Serving status")
+            self.serve_status()
         elif self.path == '/temperature':
             print("Serving temperature")
             self.serve_temperature()
@@ -84,6 +98,37 @@ class RequestHandler(BaseHTTPRequestHandler):
         with open(f'{script_dir}/www/index.html', 'rb') as f:
             self.wfile.write(f.read()
                              )
+            
+    def serve_status(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        power_status = proxy.get_cached_property('active').unpack()
+        power_status_str = "ON" if power_status else "OFF"
+        temp = proxy.get_cached_property('Temperature').unpack()
+        target_temp = proxy.get_cached_property('TargetTemperature').unpack()
+        temp_status = proxy.get_cached_property('TemperatureStatus').unpack()
+        n_spectra = proxy.get_cached_property('numberSpectra').unpack()
+        acquisition_status = proxy.get_cached_property('acquisitionStatus').unpack()
+
+
+        status = {
+            'power_status': power_status_str,
+            'temperature': temp,
+            'target_temperature': target_temp,
+            'temperature_status': temp_status,
+            'number_spectra': n_spectra,
+            'acquisition_status': acquisition_status
+
+        }
+
+
+
+        status_str = json.dumps(status, indent=4)
+        
+        #print(f"Status: \n{status_str}")
+        self.wfile.write(status_str.encode('utf-8') + b'\n')
+    
     def serve_temperature(self):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
@@ -180,7 +225,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         print("Serving data file")
         data_file = proxy.get_cached_property('dataPath')
         print(f"Data file path: {data_file}")
-        data_file_str = f"{str(data_file)}".strip("'").strip('"')
+        data_file_str = str(data_file).strip("'").strip('"')
+        data_file_str = f"../{data_file_str}"  # Ensure the path is relative to the script directory
 
         if not pathlib.Path(data_file_str).exists():
             print(f"Data file does not exist: {data_file_str}")
@@ -319,7 +365,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
             spectrum_id_variant = GLib.Variant.new_int32(spectrum_id)
             
-            spectrum = proxy.call_sync('get_data', GLib.Variant.new_tuple(spectrum_id_variant), Gio.DBusCallFlags.NONE, -1, None)
+            spectrum = proxy.call_sync('get_data', None, Gio.DBusCallFlags.NONE, -1, None)
             if spectrum is None:
                 self.send_error(404, 'Spectrum not found')
                 return

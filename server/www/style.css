@@ -47,6 +47,8 @@
             align-items: flex-start;
             justify-content: center;
             height: 100%;
+            
+            
         }
 
         .logo-vert {
@@ -59,22 +61,27 @@
 
         #l1 {
             background-color: #9817b8;
+            box-shadow: 0 0 10px #9817b8;
         }
 
         #l2 {
             background-color: #007bff;
+            box-shadow: 0 0 10px #007bff;
         }
 
         #l3 {
             background-color: #28a745;
+            box-shadow: 0 0 10px #28a745;
         }
 
         #l4 {
             background-color: #ffc107;
+            box-shadow: 0 0 10px #ffc107;
         }
 
         #l5 {
             background-color: #dc3545;
+            box-shadow: 0 0 10px #dc3545;
         }
 
         #boat {
@@ -112,20 +119,46 @@
             cursor: pointer;
             font-size: xx-large;
             font-weight: bold;
-            transition: color 0.3s ease, color 0.3s ease;
+            transition: color 0.3s ease, color 0.3s ease, text-shadow 0.3s ease;
+            
         }
 
         #power-button button.unknown {
             color: #bbbbbb;
         }
 
+        #power-button button.pending {
+            color: #ffcc00;
+            text-shadow: 
+            0 0 5px #ffcc00,
+            0 0 10px #ff9900;
+        }
+
         #power-button button.on {
+            color: #41ff6e;
+
+            text-shadow: 
+            0 0 5px #39e962,
+            0 0 10px #28a745;
+        }
+        
+        #power-button button.on:hover {
             color: #28a745;
+            text-shadow: 
+            0 0 5px #28a745,
+            0 0 10px #28a745;
         }
 
         #power-button button.off {
-            color: #dc3545;
+            color: #aa2936;
          
+        }
+
+        #power-button button.off:hover {
+            color: #ff0000;
+            text-shadow: 
+            0 0 5px #ff0000,
+            0 0 10px #ff0000;
         }
 
         #main-content {
@@ -344,12 +377,12 @@
             text-align: center;
         }
 
-        #spectrum-capture-button:disabled, #download-button:disabled {
+        #spectrum-capture-button.disabled,  #download-button:disabled {
             background-color: #ccc;
             cursor: not-allowed;
         }
 
-        #spectrum-capture-button:hover:not(:disabled), #download-button:hover:not(:disabled) {
+        #spectrum-capture-button:hover:not(.disabled), #download-button:hover:not(:disabled) {
             background-color: #0056b3;
         }
         /* #download-button {

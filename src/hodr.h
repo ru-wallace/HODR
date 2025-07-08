@@ -48,6 +48,8 @@ unsigned int hodr_setShutter(int type, int mode, int closingTime, int openingTim
 unsigned int hodr_setNumberAccumulations(int number);
 unsigned int hodr_setNumberKinetics(int number);
 unsigned int hodr_setExposureTime(float exposureTime);
+
+unsigned int hodr_changeExposureTimeDuringSeries(float exposureTime, float *kineticCycleTime);
 unsigned int hodr_startAcquisition();
 unsigned int hodr_startAcquisitionOnceTemperatureStabilized();
 

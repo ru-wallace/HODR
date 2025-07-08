@@ -251,6 +251,42 @@ unsigned int hodr_setExposureTime(float exposureTime)
     return result;
 }
 
+unsigned int hodr_changeExposureTimeDuringSeries(float exposureTime, float *kineticCycleTime)
+{
+    unsigned int result = AbortAcquisition();
+    if (result != DRV_SUCCESS)
+    {
+        fprintf(stderr, "Failed to abort acquisition before changing exposure time.\n");
+        return result; // Error
+    }
+    result = SetExposureTime(exposureTime);
+    if (result != DRV_SUCCESS)
+    {
+        fprintf(stderr, "Failed to change exposure time during series: %d\n", result);
+        return result; // Error
+    }
+
+    //delay for length of kinetic cycle time
+    if (kineticCycleTime)
+    {
+        usleep((unsigned int)(*kineticCycleTime * 1000000)); // Convert seconds to microseconds
+    }
+
+    result = StartAcquisition(); // Restart acquisition after changing exposure time
+    if (result != DRV_SUCCESS)
+    {
+        fprintf(stderr, "Failed to restart acquisition after changing exposure time: %d\n", result);
+        return result; // Error
+    }
+
+
+    cfg.INTEGRATION_TIME = exposureTime; // Update configuration
+    return DRV_SUCCESS; // Success
+}
+
+
+
+
 unsigned int hodr_startAcquisition()
 {
     unsigned int result = StartAcquisition();
@@ -385,6 +421,9 @@ unsigned int hodr_getTemperatureStatusString(int status, char *buffer, size_t bu
         break;
     case DRV_ERROR_ACK:
         snprintf(buffer, bufferSize, "Error communicating with the camera");
+        break;
+    case DRV_ACQUIRING:
+        snprintf(buffer, bufferSize, "Acquiring data");
         break;
     default:
         snprintf(buffer, bufferSize, "Unknown temperature status: %d", status);

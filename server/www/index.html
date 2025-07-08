@@ -129,8 +129,9 @@
         </div>
 
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
         <script>
-            const data = [];
+            const temperatureData = [];
             const targetTemps = [];
             const timestamps = [];
             var powerON = false;
@@ -139,6 +140,7 @@
             Chart.defaults.borderColor = '#aaaaaa';
             Chart.defaults.color = '#ffffff';
             var spectrumReference;
+            var nSpectra = 0;
             const ctx = document.getElementById('temp-chart');
             const tempChart = new Chart(ctx, {
                 type: 'line',
@@ -176,6 +178,25 @@
                                 display: true,
                                 text: 'Temperature (°C)'
                             }
+                        },
+                        x: {
+                            type: 'time',
+                            time: {
+                                minUnit: 'second',
+                                
+                                tooltipFormat: 'MMM DD, YYYY, HH:mm:ss',
+                                displayFormats: {
+                                    second: 'HH:mm:ss'
+                                }
+                            },
+                            ticks: {
+                                stepSize: 5,
+                            },
+                            display:true,
+                            title: {
+                                display: true,
+                                text: 'Timestamp'
+                            }
                         }
 
                     }
@@ -191,7 +212,7 @@
                 type: 'line',
 
                 data: {
-                    labels: [],
+                    //labels: [],
                     datasets: [{
                         label: 'Spectrum',
                         data: [],
@@ -244,7 +265,168 @@
                         document.getElementById('power-button-icon').classList.add('unknown');
                         document.getElementById('power-button-icon').textContent = 'Unknown';
                     });
+            }
 
+
+            function handleNewTemperatureData(newTemperature, newTargetTemperature, newTemperatureStatus) {
+                console.log('New temperature data received:', newTemperature, newTargetTemperature, newTemperatureStatus);
+                const time = new Date();
+                const time_unix = time.getTime();
+                timestamps.push(time);
+
+                temperatureData.push({
+                    x: time,
+                    y: newTemperature
+                });
+
+                targetTemps.push({
+                    x: time,
+                    y: newTargetTemperature
+                });
+
+                //temperatureData.push(newTemperature.toFixed(2));
+                //targetTemps.push(newTargetTemperature.toFixed(2));
+
+                if (temperatureData.length > 50) {
+                    temperatureData.shift();
+                    timestamps.shift();
+                    targetTemps.shift();
+                }
+
+                //tempChart.data.labels = timestamps.map(t => t.toLocaleTimeString());
+                tempChart.data.datasets[0].data = temperatureData;
+                tempChart.data.datasets[1].data = targetTemps;
+                tempChart.update();
+
+                document.getElementById('current-temp').textContent = newTemperature.toFixed(2);
+                document.getElementById('current-target-temp').textContent = newTargetTemperature.toFixed(2);
+                document.getElementById('last-updated').textContent = time.toLocaleTimeString();
+
+                const status = newTemperatureStatus.trim().replace(/['"]+/g, '');
+                console.log('Current temperature status:', status);
+                document.getElementById('last-updated').textContent = time.toLocaleTimeString();
+
+                if (status === 'Temperature not reached') {
+                    // document.getElementById('spectrum-capture-button').disabled = true;
+                    document.getElementById('current-temp-status').className = 'not-reached';
+                    document.getElementById('current-temp-status').innerHTML = 'Not Reached Target';
+                } else if (status === 'Temperature not stabilized') {
+                    //document.getElementById('spectrum-capture-button').disabled = true;
+                    document.getElementById('current-temp-status').className = 'not-stabilized';
+                    document.getElementById('current-temp-status').innerHTML = 'Stabilizing';
+                } else if (status === 'Temperature stabilized') {
+                    //document.getElementById('spectrum-capture-button').disabled = false;
+                    document.getElementById('current-temp-status').className = 'stabilized';
+                    document.getElementById('current-temp-status').innerHTML = 'Stabilized';
+                } else {
+                    //document.getElementById('spectrum-capture-button').disabled = true;
+                    document.getElementById('current-temp-status').className = '';
+                    document.getElementById('current-temp-status').innerHTML = status;
+                }
+
+            }
+
+            function handleNewPowerStatus(newPowerStatus) {
+                console.log('New power status received:', newPowerStatus);
+                if (newPowerStatus.trim() === 'ON') {
+                    powerON = true;
+                    document.getElementById('power-button-icon').classList.remove('off');
+                    document.getElementById('power-button-icon').classList.add('on');
+                } else {
+                    powerON = false;
+                    document.getElementById('power-button-icon').classList.remove('on');
+                    document.getElementById('power-button-icon').classList.add('off');
+
+                    document.getElementById('current-temp').textContent = '-';
+                    document.getElementById('current-target-temp').textContent = '-';
+                    document.getElementById('current-temp-status').textContent = 'Power OFF';
+                    document.getElementById('current-temp-status').classList.remove('stabilized', 'not-reached', 'not-stabilized');
+                    document.getElementById('spectrum-capture-button').textContent = 'Capture';
+                    document.getElementById('spectrum-capture-button').disabled = true;
+                }
+
+
+            }
+
+            function handleNewAcquisitionStatus(newAcquisitionStatus) {
+
+                const acquisitionStatusElement = document.getElementById('current-spectrum-status');
+                const spectrumCaptureButton = document.getElementById('spectrum-capture-button');
+
+                if (!powerON) {
+                    spectrumCaptureButton.textContent = 'Capture';
+                    spectrumCaptureButton.classList.add('disabled');
+                    acquisitionStatusElement.textContent = 'Power OFF';
+                    acquisitionInProgress = false;
+                    
+                    return;
+                } else {
+                    spectrumCaptureButton.classList.remove('disabled');
+                }
+                console.log('New acquisition status received:', newAcquisitionStatus);
+                if (newAcquisitionStatus === 20073) {
+                    spectrumCaptureButton.textContent = 'Capture';
+                    spectrumCaptureButton.classList.remove('disabled');
+                    acquisitionInProgress = false;
+                    acquisitionStatusElement.textContent = 'Idle...';
+
+                } else if (newAcquisitionStatus === 20074) {
+                    spectrumCaptureButton.disabled = true;
+                    acquisitionStatusElement.textContent = 'Temp Cycle in Progress...';
+
+                } else if (newAcquisitionStatus === 20072) {
+                    spectrumCaptureButton.textContent = 'Stop';
+                    spectrumCaptureButton.classList.remove('disabled');
+                    acquisitionStatusElement.textContent = 'Acquiring...';
+                    acquisitionInProgress = true;
+                } else {
+                    spectrumCaptureButton.textContent = 'Capture';
+                    spectrumCaptureButton.classList.remove('disabled');
+                    acquisitionStatusElement.textContent = `Unknown status: ${newAcquisitionStatus}`;
+                    acquisitionInProgress = false;
+                }
+
+
+                const mode = document.getElementById('acquisition-mode-select').value;
+                if (mode === 'continuous-auto') {
+                    if (autoAcquisitionIntervalHandle) {
+                        spectrumCaptureButton.textContent = 'Stop';
+                        acquisitionStatusElement.textContent += ' (Auto Mode)';
+                        spectrumCaptureButton.classList.remove('disabled');
+                        if (quickAdjustmentMode) {
+                            acquisitionStatusElement.textContent += ' (Quick Adjustment Mode)';
+                        }
+                    }
+                }
+            }
+
+
+            function getStatus() {
+                console.log('Fetching status...');
+                fetch('status')
+                    .then(response => response.json())
+                    .then(status => {
+
+                        newPowerStatus = status.power_status;
+                        newTemperature = status.temperature;
+                        newTargetTemperature = status.target_temperature;
+                        newAcquisitionStatus = status.acquisition_status;
+                        newNumberSpectra = status.number_spectra;
+
+
+                        handleNewPowerStatus(newPowerStatus);
+                        if (powerON) {
+                            handleNewTemperatureData(newTemperature, newTargetTemperature, status.temperature_status);
+                        }
+                        handleNewAcquisitionStatus(newAcquisitionStatus);
+
+                        document.getElementById('n-spectra-count').textContent = newNumberSpectra;
+                        if (newNumberSpectra > nSpectra) {
+                            nSpectra = newNumberSpectra;
+                            getData();
+                        }
+                    })
+                    .catch(error => console.error('Error fetching status:', error));
             }
 
 
@@ -272,16 +454,16 @@
                         const temp = temperature.toFixed(2);
                         console.log('Current temperature:', temp);
                         timestamps.push(time);
-                        data.push(temp);
+                        temperatureData.push(temp);
 
-                        if (data.length > 20) {
-                            data.shift();
+                        if (temperatureData.length > 20) {
+                            temperatureData.shift();
                             timestamps.shift();
 
                         }
 
                         tempChart.data.labels = timestamps.map(t => t.toLocaleTimeString());
-                        tempChart.data.datasets[0].data = data;
+                        tempChart.data.datasets[0].data = temperatureData;
 
 
                         tempChart.update();
@@ -344,7 +526,6 @@
                     .catch(error => console.error('Error fetching temperature status:', error));
             }
 
-            var nSpectra = 0;
 
             function getDataIfNew() {
 
@@ -517,9 +698,12 @@
                             const integrationTime = Math.max(spectrumData.integration_time / ratio, 0.00001);
                             document.getElementById('int-time-input').value = integrationTime.toFixed(5);
                             console.log('Calculated integration time:', integrationTime);
+                        } else
+                        {
+                            if (document.getElementById('int-time-input').value === '') {
+                                document.getElementById('int-time-input').value = spectrumData.integration_time.toFixed(5);
+                            }
                         }
-
-
 
                     })
                     .catch(error => console.error('Error fetching spectrum data:', error));
@@ -609,24 +793,28 @@
             document.addEventListener('DOMContentLoaded', () => {
                 getTemp(); // Initial fetch
                 getDataIfNew(); // Initial check for new spectrum data
-                getTempInterval = setInterval(() => {
-                    // TODO: code to cancel on user input
-                    getTemp();
+                // getTempInterval = setInterval(() => {
+                //     // TODO: code to cancel on user input
+                //     getTemp();
 
-                    console.log('Fetching temperature data...');
-                },
-                    5000
-                );
+                //     console.log('Fetching temperature data...');
+                // },
+                //     5000
+                // );
 
-                getDataInterval = setInterval(() => {
-                    getDataIfNew();
-                    console.log('Checking for new spectrum data...');
+                // getDataInterval = setInterval(() => {
+                //     getDataIfNew();
+                //     console.log('Checking for new spectrum data...');
+                // }, 1000);
+
+                // setInterval(() => {
+                //     checkON();
+                //     console.log('Checking power status...');
+                // }, 1000);
+                refreshInterval = setInterval(() => {
+                    getStatus();
                 }, 1000);
 
-                setInterval(() => {
-                    checkON();
-                    console.log('Checking power status...');
-                }, 1000);
 
                 document.getElementById('power-button-icon').addEventListener('click', () => {
                     console.log('Power button clicked');
@@ -641,15 +829,26 @@
                             })
                             .catch(error => console.error('Error powering off:', error));
                     } else {
+
+                        document.getElementById('power-button-icon').classList.remove('off');
+                        document.getElementById('power-button-icon').classList.remove('unknown');
+                        document.getElementById('power-button-icon').classList.add('pending');
                         fetch('activate')
                             .then(response => response.text())
                             .then(responseText => {
+                                document.getElementById('power-button-icon').classList.remove('pending');
                                 console.log('Power on response:', responseText);
                                 powerON = true;
                                 document.getElementById('power-button-icon').classList.remove('off');
                                 document.getElementById('power-button-icon').classList.add('on');
                             })
-                            .catch(error => console.error('Error powering on:', error));
+                            .catch(error => {
+                                console.error('Error powering on:', error);
+                                document.getElementById('power-button-icon').classList.remove('pending');
+                                document.getElementById('power-button-icon').classList.remove('on');
+                                document.getElementById('power-button-icon').classList.add('off');
+
+                            });
                     }
                 });
             });

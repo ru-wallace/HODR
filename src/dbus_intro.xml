@@ -14,6 +14,12 @@
         <property name="dataPath" type="s" access="read" />
         <property name="numberSpectra" type="u" access="read" />
         <property name="active" type="b" access="read" />
+        <property name="targetIntensity" type="i" access="read" />
+
+        <method name="set_target_intensity">
+            <arg name="intensity" type="u" direction="in" />
+            <arg name="result" type="b" direction="out" />
+        </method>
 
         <method name="activate">
             <arg name="result" type="b" direction="out" />
@@ -30,6 +36,7 @@
             <arg name="temperature" type="i" direction="in" />
             <arg name="result" type="b" direction="out" />
         </method>
+
 
         <method name="set_acquisition_mode">
             <arg name="mode" type="u" direction="in" />
@@ -55,7 +62,6 @@
         <method name="stop_acquisition" />
 
         <method name="get_data">
-            <arg name="ref" type="i" direction="in" />
             <arg name="data" type="(sddai)" direction="out" />
         </method>
         <method name="stop_live" />
