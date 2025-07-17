@@ -18,7 +18,6 @@
 #include <signal.h>
 #include "control.h"
 
-
 #define SHUTTER_TYP_OPEN_LOW 0
 #define SHUTTER_TYP_OPEN_HIGH 1
 #define SHUTTER_MODE_FULLY_AUTO 0
@@ -35,6 +34,7 @@ unsigned int targetIntensity = 0; // Target intensity for the acquisition
 char andorFile[256] = "../miniforge3/pkgs/andor2-sdk-2.104.30064-0/etc/andor/";
 char outFile[256]; // Output file for data
 
+int countLines();
 int createDataFile(char *directory, char *filename);
 int appendToFile(const char *filename, int spectrumID, float *exposureTime, double *temperature, const int32_t *data, size_t size);
 int readCommandThread(void *arg);
@@ -57,12 +57,13 @@ static gboolean db_getLastSpectrum(Control *control, GDBusMethodInvocation *invo
 static gboolean db_setTargetIntensity(Control *control, GDBusMethodInvocation *invocation, guint intensity, gpointer user_data);
 // static gboolean db_getData(Control *control, GDBusMethodInvocation *invocation, gint ref, gpointer user_data);
 
-
 void *handleAcquisitionLoop();
 
 char dataDir[256] = "../candor_data"; // Directory for data files
 
-double lastTemperature = 0.0; // Last temperature read from the device
+double lastTemperature = 0.0;       // Last temperature read from the device
+double lastTargetTemperature = 0.0; // Last target temperature set
+int lastTemperatureStatus = 0;      // Last temperature status read from the device
 
 uint32_t nTriggeredSpectra = 0; // Number of triggered spectra
 uint32_t nCapturedSpectra = 0;  // Number of captured spectra
@@ -78,24 +79,19 @@ bool andorActive = false; // Flag to indicate if Andor SDK is active
 
 pthread_t acqThread;
 
-
 void signalHandler(int signal)
 {
     if (signal == SIGINT || signal == SIGTERM)
     {
         printf("Received signal %d, exiting...\n", signal);
 
-
-
-        fflush(stdout); // Flush stdout to ensure all output is printed
-        endThread = true; // Set the flag to end the command thread
-        CancelWait(); // Cancel any ongoing wait operations
+        fflush(stdout);         // Flush stdout to ensure all output is printed
+        endThread = true;       // Set the flag to end the command thread
+        CancelWait();           // Cancel any ongoing wait operations
         g_main_loop_quit(loop); // Quit the main loop
-        hodr_deinit(); // Deinitialize HODR
-
+        hodr_deinit();          // Deinitialize HODR
     }
 }
-
 
 int main()
 {
@@ -122,7 +118,7 @@ int main()
 
     signal(SIGTERM, signalHandler); // Register signal handler for SIGINT
     signal(SIGINT, signalHandler);  // Register signal handler for SIGTERM
-    hodr_setCoolerMode(true); // Turn on the cooler
+    hodr_setCoolerMode(true);       // Turn on the cooler
 
     hodr_getDetectorSize(&xpixels, &ypixels); // Get detector size
 
@@ -155,8 +151,6 @@ int main()
 
     CoolerOFF(); // Turn off the cooler
 
-
-
     ShutDown();
     printf("Andor SDK shut down successfully.\n");
     return EXIT_SUCCESS;
@@ -183,7 +177,10 @@ static void dbusOnNameAcquired(GDBusConnection *connection, const gchar *name, g
     pthread_create(&acqThread, NULL, handleAcquisitionLoop, NULL); // Create a thread for handling acquisition loop
     control_set_live(control, TRUE);                               // Initialize live status to TRUE
     control_set_active(control, TRUE);                             // Set the control object as active
-    control_set_number_spectra(control, 0);                        // Initialize number of spectra to 0
+    int nSpectra = countLines();
+    if (nSpectra >= 0)
+        nCapturedSpectra = (uint32_t)nSpectra;
+    control_set_number_spectra(control, nCapturedSpectra);                 // Initialize number of spectra to 0
     control_set_data_path(control, outFile);                       // Set the data path in the control object
     printf("D-Bus name acquired successfully.\n");
     g_timeout_add_seconds(1, db_getTemperature, control);                                                           // Schedule next temperature check
@@ -434,15 +431,18 @@ static gboolean db_setTargetIntensity(Control *control, GDBusMethodInvocation *i
     if (!andorActive) // Check if Andor SDK is active
     {
         printf("Andor SDK is not active. Not setting target intensity.\n");
-        g_dbus_method_invocation_return_error(invocation, G_IO_ERROR, G_IO_ERROR_FAILED, "Andor SDK is not active.");
-        return TRUE; // Do not update if Andor SDK is not active
+        control_complete_set_target_intensity(control, invocation, FALSE); // Complete the D-Bus method invocation with failure
+        return TRUE;                                                       // Do not update if Andor SDK is not active
     }
 
+    printf("Setting target intensity to %u...\n", intensity);
+    printf("Waiting to acquire lock for setting target intensity...\n");
     pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
-
+    printf("Acquired lock for setting target intensity.\n");
     targetIntensity = intensity; // Set the target intensity
 
-    control_set_target_intensity(control, intensity);                 // Set the target intensity in the control object
+    control_set_target_intensity(control, intensity); // Set the target intensity in the control object
+    printf("Target intensity set to %u in control object.\n", intensity);
     control_complete_set_target_intensity(control, invocation, TRUE); // Complete the D-Bus method invocation with success
     printf("Target intensity set to %d successfully.\n", intensity);
     pthread_mutex_unlock(&lock); // Unlock the mutex after setting target intensity
@@ -471,24 +471,30 @@ static gboolean db_getTemperature(gpointer control)
 
     double currentTempDouble = (double)currentTemp; // Convert current temperature to double
     double targetTempDouble = (double)targetTemp;   // Convert target temperature to double
-    if (currentTempDouble != lastTemperature)
-    {
-
-        lastTemperature = currentTempDouble; // Update last temperature
-    }
 
     int tempStatus;
-    hodr_getCurrentTemperatureStatus(&tempStatus);                                                                                      // Get current temperature status
-    char tempStatusString[64];                                                                                                          // Buffer for temperature status string
-    hodr_getTemperatureStatusString(tempStatus, tempStatusString, 64);                                                                  // Get temperature status string
-    printf("Current Temperature: %.2f, Target Temperature: %.2f, Status: %s\n", currentTempDouble, targetTempDouble, tempStatusString); // Log the temperatures and status
-    fflush(stdout);                                                                                                                  // Flush stdout to ensure immediate output
-    pthread_mutex_unlock(&lock);                                                                                                        // Unlock the mutex after getting temperature
+    hodr_getCurrentTemperatureStatus(&tempStatus); // Get current temperature status
+
+    if (currentTempDouble != lastTemperature ||
+        targetTempDouble != lastTargetTemperature || tempStatus != lastTemperatureStatus) // Check if temperatures or status have changed
+    {
+        char tempStatusString[64];                                         // Buffer for temperature status string
+        hodr_getTemperatureStatusString(tempStatus, tempStatusString, 64); // Get temperature status string
+        printf("Current Temperature: %.2f, Target Temperature: %.2f, Status: %s\n", currentTempDouble, targetTempDouble, tempStatusString);
+        lastTargetTemperature = targetTempDouble; // Update last target temperature
+        lastTemperature = currentTempDouble;      // Update last temperature
+        lastTemperatureStatus = tempStatus;       // Update last temperature status
+        fflush(stdout);                           // Flush stdout to ensure immediate output
+
+        control_set_target_temperature(control, targetTempDouble); // Set target temperature in the control object
+        control_set_temperature(control, currentTempDouble);       // Set current temperature in the control object
+        control_set_temperature_status(control, tempStatusString); // Set temperature status in the control object
+    }
+
+    pthread_mutex_unlock(&lock); // Unlock the mutex after getting temperature
     // control_emit_temperature_status(control, currentTempDouble, tempStatusString, targetTempDouble); // Emit temperature status signal
-    control_set_target_temperature(control, targetTempDouble); // Set target temperature in the control object
-    control_set_temperature(control, currentTempDouble);       // Set current temperature in the control object
-    control_set_temperature_status(control, tempStatusString); // Set temperature status in the control object
-    gboolean live = control_get_live(control);                 // Get live status from the control object
+
+    gboolean live = control_get_live(control); // Get live status from the control object
 
     if (!live)
     {
@@ -689,15 +695,15 @@ static gboolean db_getLastSpectrum(Control *control, GDBusMethodInvocation *invo
     // First token is spectrum ID, ignore it
     char token[64];
 
-    char *firstToken = strtok(line, ","); // Get the first token (spectrum ID)
-    if (firstToken == NULL)
-    {
-        g_dbus_method_invocation_return_error(invocation, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Failed to parse spectrum ID from data file.");
-        printf("Failed to parse spectrum ID from data file.\n");
-        return FALSE; // Error parsing spectrum ID
-    }
+    //char *firstToken = strtok(line, ","); // Get the first token (spectrum ID)
+    // if (firstToken == NULL)
+    // {
+    //     g_dbus_method_invocation_return_error(invocation, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Failed to parse spectrum ID from data file.");
+    //     printf("Failed to parse spectrum ID from data file.\n");
+    //     return FALSE; // Error parsing spectrum ID
+    // }
 
-    char *timeToken = strtok(NULL, ",");
+    char *timeToken = strtok(line, ",");
 
     printf("Time token: %s\n", timeToken); // Log the time token
     strcpy(token, timeToken);              // Copy the token to a buffer
@@ -788,6 +794,40 @@ int createDataFile(char *directory, char *filename)
     return filepathLength; // Return the length of the file path
 }
 
+int countLines() {
+    pthread_mutex_lock(&dataFileLock); // Lock the mutex for data file operations#
+    FILE *file = fopen(outFile, "r");
+    size_t buffSize = 65536;
+    char buf[buffSize];
+    int counter = 0;
+    for (;;)
+    {
+        size_t res = fread(buf, 1, buffSize, file);
+        if (ferror(file))
+        {
+            pthread_mutex_unlock(&dataFileLock); // unLock the mutex for data file operations
+            return -1;
+        }
+
+        int i;
+        for (i = 0; i < res; i++)
+        {
+            if (buf[i]== '\n')
+            {
+                counter++;
+            }
+        }
+
+        if (feof(file))
+        {
+            break;
+        }
+
+    }
+    pthread_mutex_unlock(&dataFileLock); // unLock the mutex for data file operations
+    return counter;
+}
+
 int appendToFile(const char *filename, int spectrumID, float *exposureTime, double *temperature, const int32_t *data, size_t size)
 {
 
@@ -809,9 +849,8 @@ int appendToFile(const char *filename, int spectrumID, float *exposureTime, doub
     // current_time -= (time_t)(*exposureTime * 1000000000);
     time_info = localtime(&current_time);
 
-
     strftime(timeString, sizeof(timeString), "%Y-%m-%dT%H:%M:%S", time_info);
-    //fprintf(file, "%d,", spectrumID);      // Write spectrum ID
+    // fprintf(file, "%d,", spectrumID);      // Write spectrum ID
     fprintf(file, "%s,", timeString);      // Write timestamp
     fprintf(file, "%.9f,", *exposureTime); // Write exposure time
     fprintf(file, "%.2f,", *temperature);  // Write temperature
@@ -841,7 +880,7 @@ void adjustIntegrationTime(unsigned int targetIntensity, float exposureTime, int
 
     while (true)
     {
-        
+
         if (targetIntensity == 0)
         {
             printf("Target intensity is not set or invalid. Skipping adjustment of integration time.\n");
@@ -878,17 +917,14 @@ void adjustIntegrationTime(unsigned int targetIntensity, float exposureTime, int
             printf("Adjusted integration time based on target intensity: %.6f seconds\n", newIntegrationTime);
         }
 
-
-
-        hodr_abortAcquisition();   
+        hodr_abortAcquisition();
         unsigned int result = hodr_setExposureTime(newIntegrationTime); // Set the new exposure time in HODR
-        
+
         result = hodr_startAcquisition(); // Restart acquisition with the new exposure time
         if (result != DRV_SUCCESS)
         {
-                fprintf(stderr, "Failed to restart acquisition with new integration time: %d\n", result);
+            fprintf(stderr, "Failed to restart acquisition with new integration time: %d\n", result);
         }
-        
 
         if (attemptLimit-- == 0) // Check if attempt limit is reached
         {
@@ -905,7 +941,6 @@ void adjustIntegrationTime(unsigned int targetIntensity, float exposureTime, int
         result = hodr_getMostRecentImage(data, (size_t)xpixels); // Get the most recent image acquired
         float kineticCycleTime, readoutTime;
         hodr_getAcquisitionTimings(&exposureTime, &kineticCycleTime, &readoutTime); // Get acquisition timings
-
     }
 }
 
@@ -968,19 +1003,16 @@ void *handleAcquisitionLoop() // Function to handle the acquisition loop
 
         printf("Acq. %d: Last temperature: %.2f\n", nCapturedSpectra, lastTemperature); // Log the last temperature
 
-
         printf("Target intensity: %d\n", targetIntensity); // Log the target intensity
         if (targetIntensity > 0)
         {
             printf("Acq. %d: Target intensity: %d at integration time %.5fs\n", nCapturedSpectra - 1, targetIntensity, exposureTime); // Log the target intensity
-           
+
             adjustIntegrationTime(targetIntensity, exposureTime, data, xpixels, 5); // Adjust integration time based on target intensity
         }
 
-        
-        hodr_getAcquisitionTimings(&exposureTime, &kineticCycleTime, &readoutTime); // Get acquisition timings
+        hodr_getAcquisitionTimings(&exposureTime, &kineticCycleTime, &readoutTime);                         // Get acquisition timings
         result = appendToFile(outFile, nCapturedSpectra++, &exposureTime, &lastTemperature, data, xpixels); // Append data to output file
-
 
         printf("Data appended to file. Result: %d, N captured spectra: %d\n", result, nCapturedSpectra);
         pthread_mutex_unlock(&lock); // Unlock the mutex after processing
