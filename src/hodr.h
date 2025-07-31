@@ -23,7 +23,7 @@ typedef struct {
     int NUMBER_ACCUMULATIONS; // Number of accumulations for the acquisition
     float INTERVAL; // Interval in seconds for acquisition
     float INTEGRATION_TIME; // Integration time in seconds
-
+    bool START_FLAG; // Flag to indicate if acquisition should start immediately
     int xpixels; // Number of horizontal pixels in the detector
     int ypixels; // Number of vertical pixels in the detector
     bool ACQ_FLAG; // Flag to indicate if acquisition should be started once temperature is stabilized
@@ -74,3 +74,4 @@ unsigned int hodr_setOutFile(const char *outFile);
 unsigned int hodr_isTemperatureStabilized();
 unsigned int hodr_writeStatusToFIFO(const char *fifoPath);
 
+unsigned int secondsToNextHourFraction(uint32_t minutes);

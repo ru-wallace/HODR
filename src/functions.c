@@ -45,6 +45,7 @@ unsigned int hodr_init(HODR_Config_t *config, char *andorPath, const char *outFi
         cfg.INTERVAL = 1.0f;                        // Default interval in seconds
         cfg.INTEGRATION_TIME = 0.01f;               // Default integration time in seconds
         cfg.ACQ_FLAG = false;                       // Acquisition flag
+        cfg.START_FLAG = false;                     // Start flag for immediate acquisition
         strncpy(cfg.OUT_FILE, outFile, sizeof(cfg.OUT_FILE) - 1);
 
       
@@ -60,7 +61,7 @@ unsigned int hodr_init(HODR_Config_t *config, char *andorPath, const char *outFi
     hodr_setShutter(cfg.SHUTTER_TYPE, cfg.SHUTTER_MODE, 0, 0); // Set shutter to fully auto mode
     printf("Andor SDK initialized successfully.\n");
 
-    config = &cfg; // Update the provided configuration pointer
+    //*config = cfg; // Update the provided configuration pointer
     return DRV_SUCCESS; // Success
 }
 
@@ -517,4 +518,56 @@ unsigned int hodr_setOutFile(const char *outFile)
 unsigned int hodr_getAcqFlag()
 {
     return cfg.ACQ_FLAG; // Return the acquisition flag
+}
+
+
+unsigned int secondsToNextHourFraction(uint32_t minutes)
+{
+    printf("Calculating seconds to next hour fraction with minutes: %u\n", minutes);
+    fflush(stdout);
+
+    if (60 % minutes != 0)
+    {
+        fprintf(stderr, "Minutes must be a factor of 60 for proper timing.\n");
+        fflush(stderr);
+        return 0; // Error
+    }
+
+    if (minutes == 0)
+    {
+        printf("No schedule set, returning 0 seconds.\n");
+        fflush(stdout);
+        return 0; // No schedule, return 0
+    }
+
+    time_t now = time(NULL);
+    struct tm *tm_now = localtime(&now);
+    // tm_now->tm_min = 0; // Set minutes to 0
+    // tm_now->tm_sec = 0; // Set seconds to 0
+    // tm_now->tm_hour += 1; // Move to the next hour
+
+    uint32_t secondsNow = tm_now->tm_sec + (tm_now->tm_min * 60);
+
+
+
+
+    uint32_t tracker = 0; 
+    while (tracker <= secondsNow)
+    {
+        tracker += minutes * 60; // Increment tracker by the specified minutes in seconds
+
+    }
+
+
+    printf("Current time: %02d:%02d:%02d\n", tm_now->tm_hour, tm_now->tm_min, tm_now->tm_sec);
+    printf("Next hour fraction mins: %u\n", tracker/60);
+    fflush(stdout);
+
+    uint32_t secondsToNextFraction = tracker - secondsNow; // Calculate seconds to next hour fraction
+
+    uint32_t secondsRemainder = secondsToNextFraction % 60; // Get the remainder in seconds
+    uint32_t minutesToNextFraction = (secondsToNextFraction-secondsRemainder) / 60; // Get the minutes to next hour fraction
+    printf("Time to next hour fraction: %u minutes and %u seconds\n", minutesToNextFraction, secondsRemainder);
+
+    return secondsToNextFraction; // Return the seconds to the next hour fraction
 }

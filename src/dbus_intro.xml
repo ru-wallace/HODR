@@ -15,6 +15,14 @@
         <property name="numberSpectra" type="u" access="read" />
         <property name="active" type="b" access="read" />
         <property name="targetIntensity" type="i" access="read" />
+        <property name="wallclockInterval" type="u" access="read" />
+        <property name="wallclockAcquisitionActive" type="b" access="read" />
+        <property name="wallclockNextCapture" type="u" access="read" />
+        
+        <property name="overHeatRebootCount" type="u" access="read" />
+        <property name="overHeatCount" type="u" access="read" />
+        <property name="overHeatCooldownActive" type="b" access="read" />
+        <property name="overHeatCooldownEndTime" type="u" access="read" />
 
         <method name="set_target_intensity">
             <arg name="intensity" type="u" direction="in" />
@@ -51,6 +59,19 @@
             <arg name="result" type="b" direction="out" />
         </method>
 
+        <method name="set_wallclock_interval">
+            <arg name="interval" type="u" direction="in" />
+            <arg name="result" type="b" direction="out" />
+        </method>
+
+        <method name="start_wallclock_acquisition">
+            <arg name="result" type="b" direction="out" />
+        </method>
+
+        <method name="stop_wallclock_acquisition">
+            <arg name="result" type="b" direction="out" />
+        </method>
+
         <method name="start_acquisition">
             <arg name="integration_time" type="d" direction="in" />
             <arg name="interval_time" type="d" direction="in" />
@@ -66,5 +87,17 @@
         </method>
         <method name="stop_live" />
         <method name="exit" />
+
+        <signal name="acquisition_finished">
+            <arg name="number" type="u" />
+        </signal>
+
+        <signal name="power_off">
+            <arg name="reason" type="u" />
+        </signal>
+        <signal name="power_on">
+            <arg name="reason" type="u" />
+        </signal>
+
     </interface>
 </node>
