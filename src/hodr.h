@@ -32,7 +32,7 @@ typedef struct {
 
 
 unsigned int hodr_getDetectorSize(int *xpixels, int *ypixels);
-unsigned int hodr_init(HODR_Config_t *config, char *andorPath, const char *outFile, bool resetConfig);
+unsigned int hodr_init(char *andorPath, const char *outFile, bool resetConfig);
 unsigned int hodr_deinit();
 unsigned int hodr_setCoolerMode( bool mode);
 unsigned int hodr_getCurrentTemperatureFloat(float *temperature);

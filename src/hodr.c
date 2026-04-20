@@ -37,7 +37,7 @@ char outFile[256]; // Output file for data
 
 int countLines();
 int createDataFile(char *directory, char *filename);
-int appendToFile(const char *filename, float *exposureTime, double *temperature, const int32_t *data, size_t size);
+int appendToFile(float *exposureTime, double *temperature, const int32_t *data, size_t size);
 int readCommandThread(void *arg);
 static void dbusOnNameAcquired(GDBusConnection *connection, const gchar *name, gpointer user_data);
 
@@ -82,12 +82,12 @@ GMainLoop *loop;
 
 guint dataWaitFunctionRef;
 
-HODR_Config_t *hodr_cfg; // Pointer to HODR configuration structure
+//HODR_Config_t *hodr_cfg; // Pointer to HODR configuration structure
 
 bool andorActive = false; // Flag to indicate if Andor SDK is active
 bool overHeated = false;  // Flag to indicate if the device is overheated
 
-u_int32_t wallclockInterval = 5;        // Interval for wallclock acquisition in minutes (0 means no schedule).
+u_int32_t wallclockInterval = 2;        // Interval for wallclock acquisition in minutes (0 means no schedule).
 bool wallclockAcquisitionActive = true; // Flag to indicate if wallclock acquisition is active
 // Must be a factor of 60 to ensure proper timing repeating every hour.
 int timerHandle;
@@ -212,6 +212,7 @@ static void dbusOnNameAcquired(GDBusConnection *connection, const gchar *name, g
     control_set_target_temperature(control, initialTargetTemperature);             // Set the target temperature in the control object
     control_set_wallclock_interval(control, wallclockInterval);                    // Set wallclock acquisition interval in the control object
     control_set_wallclock_acquisition_active(control, wallclockAcquisitionActive); // Set wallclock acquisition active status in the control object
+
     activateHodr(control);                                                         // Activate HODR
 
     g_timeout_add_seconds(1, db_updateNCaptures, control);                                                          // Schedule next update of number of captures
@@ -266,7 +267,7 @@ static gboolean activateHodr(Control *control)
     }
 
     pthread_mutex_lock(&lock);                                            // Lock the mutex to ensure thread safety
-    unsigned int result = hodr_init(hodr_cfg, andorFile, outFile, false); // Initialize HODR
+    unsigned int result = hodr_init(andorFile, outFile, false); // Initialize HODR
     if (result == DRV_SUCCESS)
     {
         andorActive = true;                // Set Andor SDK active flag to TRUE
@@ -371,7 +372,7 @@ static gboolean db_resetHodr(Control *control, GDBusMethodInvocation *invocation
         control_set_active(control, FALSE); // Set the control object as inactive
     }
 
-    unsigned int initResult = hodr_init(hodr_cfg, andorFile, outFile, true); // Reinitialize HODR
+    unsigned int initResult = hodr_init(andorFile, outFile, true); // Reinitialize HODR
     if (initResult != DRV_SUCCESS)
     {
         control_complete_reset(control, invocation, FALSE); // Complete the D-Bus method invocation with failure
@@ -1181,7 +1182,7 @@ int countLines()
     return counter;
 }
 
-int appendToFile(const char *filename, float *exposureTime, double *temperature, const int32_t *data, size_t size)
+int appendToFile(float *exposureTime, double *temperature, const int32_t *data, size_t size)
 {
 
     createDataFile(dataDir, outFile);
@@ -1273,25 +1274,30 @@ void adjustIntegrationTime(unsigned int targetIntensity, float exposureTime, int
                 return; // If max intensity is within 10% of target intensity, keep the current integration time
             }
             newIntegrationTime = exposureTime * ((float)targetIntensity / (float)maxIntensity); // Adjust integration time based on target intensity
-            printf("Adjusted integration time based on target intensity: %.6f seconds\n", newIntegrationTime);
+            if (newIntegrationTime >= 900.0)
+            {
+             printf("Max integration time reached\n");
+             attemptLimit = 1;
+             newIntegrationTime = 900.0;
+            } else if (newIntegrationTime <= 0.001) {
+             printf("Min integration time reached\n");
+             attemptLimit = 1;
+             newIntegrationTime = 0.001;
+            }
+	    printf("Adjusted integration time based on target intensity: %.6f seconds\n", newIntegrationTime);
             fflush(stdout);
         }
 
         hodr_abortAcquisition();
         unsigned int result = hodr_setExposureTime(newIntegrationTime); // Set the new exposure time in HODR
-
+        
         result = hodr_startAcquisition(); // Restart acquisition with the new exposure time
         if (result != DRV_SUCCESS)
         {
             fprintf(stderr, "Failed to restart acquisition with new integration time: %d\n", result);
         }
 
-        if (attemptLimit-- == 0) // Check if attempt limit is reached
-        {
-            printf("Attempt limit reached. Stopping adjustment of integration time.\n");
-            fflush(stdout);
-            return; // Stop adjusting if attempt limit is reached
-        }
+
 
         result = WaitForAcquisition(); // Wait for acquisition to finish before checking again
         if (result != DRV_SUCCESS)
@@ -1302,6 +1308,15 @@ void adjustIntegrationTime(unsigned int targetIntensity, float exposureTime, int
         result = hodr_getMostRecentImage(data, (size_t)xpixels); // Get the most recent image acquired
         float kineticCycleTime, readoutTime;
         hodr_getAcquisitionTimings(&exposureTime, &kineticCycleTime, &readoutTime); // Get acquisition timings
+
+	attemptLimit -= 1;
+        printf("Attempts: %d\n", attemptLimit);
+        if (attemptLimit <= 0) // Check if attempt limit is reached
+        {
+            printf("Attempt limit reached. Stopping adjustment of integration time.\n");
+            fflush(stdout);
+            return; // Stop adjusting if attempt limit is reached
+        }
     }
 }
 
@@ -1442,7 +1457,7 @@ void *handleAcquisitionLoop(void *arg) // Function to handle the acquisition loo
         }
 
         hodr_getAcquisitionTimings(&exposureTime, &kineticCycleTime, &readoutTime);     // Get acquisition timings
-        result = appendToFile(outFile, &exposureTime, &lastTemperature, data, xpixels); // Append data to output file
+        result = appendToFile(&exposureTime, &lastTemperature, data, xpixels); // Append data to output file
         control_set_number_spectra(control, nCapturedSpectra);
         control_set_data_path(control, outFile);   // Set the data path in the control object
         setNextAcquisition(&timerHandle, control); // Set the next acquisition time based on the wallclock acquisition interval

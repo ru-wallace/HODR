@@ -14,7 +14,7 @@
 
 HODR_Config_t cfg = {0}; // Default configuration
 
-unsigned int hodr_init(HODR_Config_t *config, char *andorPath, const char *outFile, bool resetConfig)
+unsigned int hodr_init(char *andorPath, const char *outFile, bool resetConfig)
 {
     
     strncpy(cfg.OUT_FILE, outFile, sizeof(cfg.OUT_FILE) - 1);
