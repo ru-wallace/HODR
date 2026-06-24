@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <stdbool.h>
+#include <ctype.h>
 
 
 HODR_Config_t cfg = {0}; // Default configuration
@@ -299,6 +300,18 @@ unsigned int hodr_startAcquisition()
 
     return result;
 }
+
+
+// unsigned int hodr_abortAcquisition()
+// {
+//     unsigned int result = AbortAcquisition();
+//     if (result != DRV_SUCCESS)
+//     {
+//         fprintf(stderr, "Failed to abort acquisition: %d\n", result);
+//     }
+//     return result;
+// }
+
 unsigned int hodr_startAcquisitionOnceTemperatureStabilized()
 {
     // int result = hodr_setTargetTemperature(targetTemp);
@@ -571,3 +584,127 @@ unsigned int secondsToNextHourFraction(uint32_t minutes)
 
     return secondsToNextFraction; // Return the seconds to the next hour fraction
 }
+
+
+uint32_t getConfigValueString(const char *filePath, const char *key, char *value, size_t valueSize)
+{
+    FILE *file = fopen(filePath, "r");
+    if (!file)
+    {
+        fprintf(stderr, "Failed to open config file: %s\n", filePath);
+        return -1; // Error opening file
+    }
+
+    char line[256];
+    while (fgets(line, sizeof(line), file))
+    {
+        char *hashSign = strchr(line, '#');
+        if (hashSign)
+        {
+            *hashSign = '\0'; // Remove comments from the line
+        }
+        char *equalsSign = strchr(line, '=');
+        if (equalsSign)
+        {
+            *equalsSign = '\0'; // Split the line into key and value
+            char *lineKey = line;
+            char *lineValue = equalsSign + 1;
+
+            // Remove newline character from lineValue
+            lineValue[strcspn(lineValue, "\r\n")] = 0;
+            // Trim whitespace from lineKey and lineValue
+            while (isspace((unsigned char)*lineKey))
+                lineKey++;
+            while (isspace((unsigned char)*lineValue))
+                lineValue++;
+
+            if (strcmp(lineKey, key) == 0)
+            {
+                strncpy(value, lineValue, valueSize - 1); // Copy value to output buffer
+                value[valueSize - 1] = '\0';              // Ensure null termination
+                fclose(file);
+                return 0; // Key found and value retrieved
+            }
+        }
+    }
+
+    fclose(file);
+    fprintf(stderr, "Key '%s' not found in config file: %s\n", key, filePath);
+    return -1; // Key not found
+}
+
+
+
+uint32_t getConfigValueInt(const char *filePath, const char *key, int *value) 
+{
+    char valueStr[32];
+    if (getConfigValueString(filePath, key, valueStr, sizeof(valueStr)) == 0) 
+    {
+        *value = atoi(valueStr); // Convert string to integer
+        return 0; // Success
+    } 
+    else 
+    {
+        fprintf(stderr, "Failed to get integer value for key '%s' from config file: %s\n", key, filePath);
+        return -1; // Error
+    }
+}
+
+uint32_t getConfigValueUnsignedInt(const char *filePath, const char *key, unsigned int *value) 
+{
+    char valueStr[32];
+    if (getConfigValueString(filePath, key, valueStr, sizeof(valueStr)) == 0) 
+    {
+        *value = (unsigned int)strtoul(valueStr, NULL, 10); // Convert string to unsigned integer
+        return 0; // Success
+    } 
+    else 
+    {
+        fprintf(stderr, "Failed to get unsigned integer value for key '%s' from config file: %s\n", key, filePath);
+        return -1; // Error
+    }
+}
+
+uint32_t getConfigValueFloat(const char *filePath, const char *key, float *value) 
+{
+    char valueStr[32];
+    if (getConfigValueString(filePath, key, valueStr, sizeof(valueStr)) == 0) 
+    {
+        *value = atof(valueStr); // Convert string to float
+        return 0; // Success
+    } 
+    else 
+    {
+        fprintf(stderr, "Failed to get float value for key '%s' from config file: %s\n", key, filePath);
+        return -1; // Error
+    }
+}
+
+uint32_t getConfigValueBool(const char *filePath, const char *key, bool *value) 
+{
+    char valueStr[32];
+    if (getConfigValueString(filePath, key, valueStr, sizeof(valueStr)) == 0) 
+    {
+        if (strcasecmp(valueStr, "true") == 0 || strcmp(valueStr, "1") == 0) 
+        {
+            *value = true; // Set boolean to true
+        } 
+        else if (strcasecmp(valueStr, "false") == 0 || strcmp(valueStr, "0") == 0) 
+        {
+            *value = false; // Set boolean to false
+        } 
+        else 
+        {
+            fprintf(stderr, "Invalid boolean value for key '%s' in config file: %s\n", key, filePath);
+            return -1; // Error
+        }
+        return 0; // Success
+    } 
+    else 
+    {
+        fprintf(stderr, "Failed to get boolean value for key '%s' from config file: %s\n", key, filePath);
+        return -1; // Error
+    }
+}
+
+

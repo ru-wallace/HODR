@@ -29,10 +29,21 @@ pthread_mutex_t dataFileLock;        // Mutex for data file operations
 pthread_mutex_t acquisitionLoopLock; // Mutex for acquisition loop operations
 bool endThread = false;              // Flag to signal the command thread to end
 
-unsigned int initialTargetIntensity = 60000; // Target intensity for the acquisition
+uint32_t initialMode = 1; // Initial acquisition mode
+uint32_t initialTargetIntensity = 60000; // Target intensity for the acquisition
+float initialIntegrationTime = 0.01f; // Initial integration time for the acquisition
+float minimumIntegrationTime = 0.0f; // Minimum integration time for the acquisition
+float maximumIntegrationTime = 900.0f; // Maximum integration time for the acquisition
 int32_t initialTargetTemperature = -70;      // Initial target temperature for the acquisition
+bool initialCoolerMode = true;                     // Initial cooler mode (true for ON, false for OFF)
 
-char andorFile[256] = "../miniforge3/pkgs/andor2-sdk-2.104.30064-0/etc/andor/";
+bool initialWallclockActive = true; // Initial wallclock acquisition active status
+// Must be a factor of 60 to ensure proper timing repeating every hour.
+uint32_t initialWallclockInterval = 2; // Initial wallclock acquisition interval in minutes (0 means no schedule)
+
+//char andorFile[256] = "../miniforge3/pkgs/andor2-sdk-2.104.30064-0/etc/andor/";
+char initFile[256] = "./hodr.conf"; // Configuration file for HODR
+char andorFile[256] = "../andor/etc/";
 char outFile[256]; // Output file for data
 
 int countLines();
@@ -87,9 +98,7 @@ guint dataWaitFunctionRef;
 bool andorActive = false; // Flag to indicate if Andor SDK is active
 bool overHeated = false;  // Flag to indicate if the device is overheated
 
-u_int32_t wallclockInterval = 2;        // Interval for wallclock acquisition in minutes (0 means no schedule).
-bool wallclockAcquisitionActive = true; // Flag to indicate if wallclock acquisition is active
-// Must be a factor of 60 to ensure proper timing repeating every hour.
+
 int timerHandle;
 
 pthread_t acqThread;
@@ -108,6 +117,9 @@ void signalHandler(int signal)
     }
 }
 
+
+
+
 int main()
 {
 
@@ -116,25 +128,6 @@ int main()
     pthread_mutex_init(&dataFileLock, NULL);        // Initialize the data file mutex
     pthread_mutex_init(&acquisitionLoopLock, NULL); // Initialize the acquisition loop mutex
 
-    // if (hodr_init(hodr_cfg, andorFile, outFile, true) != DRV_SUCCESS)
-    // {
-    //     fprintf(stderr, "Failed to initialize HODR.\n");
-    // }
-    // else
-    // {
-    //     printf("HODR initialized successfully.\n");
-    //     andorActive = true;             // Set Andor SDK active flag
-    //     hodr_setCoolerMode(true);       // Turn on the cooler
-    //     hodr_setTargetTemperature(-70); // Set target temperature to -70 degrees Celsius
-
-    //     hodr_getDetectorSize(&xpixels, &ypixels); // Get detector size
-
-    //     float currentTemp;
-    //     hodr_getCurrentTemperatureFloat(&currentTemp); // Get current temperature
-
-    //     int minTemp, maxTemp;
-    //     hodr_getTemperatureRange(&minTemp, &maxTemp); // Get temperature range
-    // }
 
     int dataFileLength = createDataFile(dataDir, outFile); // Create data file
     if (dataFileLength < 0)
@@ -174,6 +167,126 @@ int main()
     return EXIT_SUCCESS;
 }
 
+void loadConfig()
+{
+
+    if (getConfigValueUnsignedInt(initFile, "mode", &initialMode) == 0)
+    {
+        printf("Initial acquisition mode read from config: %u\n", initialMode);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+    else
+    {
+        printf("Failed to read initial acquisition mode from config, using default: %u\n", initialMode);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+
+    if (getConfigValueInt(initFile, "target_temperature", &initialTargetTemperature) == 0)
+    {
+        printf("Initial target temperature read from config: %d\n", initialTargetTemperature);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+    else
+    {
+        printf("Failed to read initial target temperature from config, using default: %d\n", initialTargetTemperature);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+
+    if (getConfigValueUnsignedInt(initFile, "target_intensity", &initialTargetIntensity) == 0)
+    {
+        printf("Initial target intensity read from config: %d\n", initialTargetIntensity);
+        fflush(stdout); // Flush stdout to ensure immediate output
+
+        if (initialMode == 0) {
+            initialTargetIntensity = 0; // If mode is 0, set target intensity to 0
+            printf("Initial mode is Set Integration Time, setting initial target intensity to 0.\n");
+        }
+    }
+    else
+    {
+        printf("Failed to read initial target intensity from config, using default: %d\n", initialTargetIntensity);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+
+
+    if (getConfigValueFloat(initFile, "integration_time", &initialIntegrationTime) == 0)
+    {
+        printf("Initial integration time read from config: %f seconds\n", initialIntegrationTime);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+    else
+    {
+        printf("Failed to read initial integration time from config, using default: %f seconds\n", initialIntegrationTime);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+
+    if (getConfigValueBool(initFile, "cooler_mode", &initialCoolerMode) == 0)
+    {
+        printf("Initial cooler mode read from config: %s\n", initialCoolerMode ? "ON" : "OFF");
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+    else
+    {
+        printf("Failed to read initial cooler mode from config, using default: %s\n", initialCoolerMode ? "ON" : "OFF");
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+
+
+
+    if (getConfigValueUnsignedInt(initFile, "wallclock_interval_minutes", &initialWallclockInterval) == 0)
+    {
+        printf("Wallclock acquisition interval read from config: %u minutes\n", initialWallclockInterval);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+    else
+    {
+        printf("Failed to read wallclock acquisition interval from config, using default: %u minutes\n", initialWallclockInterval);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+
+        if (getConfigValueBool(initFile, "wallclock_active", &initialWallclockActive) == 0)
+    {
+        printf("Initial wallclock acquisition active status read from config: %s\n", initialWallclockActive ? "ACTIVE" : "INACTIVE");
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+    else
+    {
+        printf("Failed to read initial wallclock acquisition active status from config, using default: %s\n", initialWallclockActive ? "ACTIVE" : "INACTIVE");
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+    if (getConfigValueFloat(initFile, "minimum_integration_time", &minimumIntegrationTime) == 0)
+    {
+        printf("Minimum integration time read from config: %f seconds\n", minimumIntegrationTime);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+    else
+    {
+        printf("Failed to read minimum integration time from config, using default: %f seconds\n", minimumIntegrationTime);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+
+    if (getConfigValueFloat(initFile, "maximum_integration_time", &maximumIntegrationTime) == 0)
+    {
+        printf("Maximum integration time read from config: %f seconds\n", maximumIntegrationTime);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+    else
+    {
+        printf("Failed to read maximum integration time from config, using default: %f seconds\n", maximumIntegrationTime);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+
+
+    printf("Configuration loaded:\n\tmode=%u\n\ttarget_temperature=%d\n\ttarget_intensity=%u\n\tintegration_time=%f\n\tcooler_mode=%s\n\twallclock_interval=%u\n\twallclock_active=%s\n",
+              initialMode, initialTargetTemperature, initialTargetIntensity, initialIntegrationTime, initialCoolerMode ? "ON" : "OFF", initialWallclockInterval, initialWallclockActive ? "ACTIVE" : "INACTIVE");
+
+
+
+}
+
+
+
+
 static void dbusOnNameAcquired(GDBusConnection *connection, const gchar *name, gpointer)
 {
 
@@ -197,6 +310,10 @@ static void dbusOnNameAcquired(GDBusConnection *connection, const gchar *name, g
     g_signal_connect(control, "handle-exit", G_CALLBACK(db_exitMainLoop), NULL);                                      // Connect the signal for exiting the application
 
     int nSpectra = countLines();
+
+    loadConfig(); // Load configuration from the config file
+
+
     printf("Number of spectra in data file: %d\n", nSpectra);
     fflush(stdout); // Flush stdout to ensure immediate output
     if (nSpectra >= 0)
@@ -206,12 +323,14 @@ static void dbusOnNameAcquired(GDBusConnection *connection, const gchar *name, g
     control_set_wallclock_next_capture(control, 0);        // Initialize wallclock next capture to 0
 
     control_set_over_heat_reboot_count(control, 0);             // Initialize overheat reboot count to 0
+
+
     control_set_temperature(control, initialTargetTemperature); // Set the initial target temperature in the control object
 
     control_set_target_intensity(control, initialTargetIntensity);                 // Set the target intensity in the control object
     control_set_target_temperature(control, initialTargetTemperature);             // Set the target temperature in the control object
-    control_set_wallclock_interval(control, wallclockInterval);                    // Set wallclock acquisition interval in the control object
-    control_set_wallclock_acquisition_active(control, wallclockAcquisitionActive); // Set wallclock acquisition active status in the control object
+    control_set_wallclock_interval(control, initialWallclockInterval);                    // Set wallclock acquisition interval in the control object
+    control_set_wallclock_acquisition_active(control, initialWallclockActive); // Set wallclock acquisition active status in the control object
 
     activateHodr(control);                                                         // Activate HODR
 
@@ -273,6 +392,10 @@ static gboolean activateHodr(Control *control)
         andorActive = true;                // Set Andor SDK active flag to TRUE
         control_set_active(control, TRUE); // Set the control object as active
         control_set_live(control, TRUE);   // Initialize live status to TRUE
+
+
+
+    
 
         printf("HODR activated successfully.\n");
         hodr_setCoolerMode(true); // Turn on the cooler
@@ -474,6 +597,7 @@ static gboolean db_setIntegrationTime(Control *control, GDBusMethodInvocation *i
         return TRUE;                 // Invalid integration time
     }
 
+    control_set_target_intensity(control, 0); // Set target intensity to 0 before changing integration time
     unsigned int result = hodr_setExposureTime(int_time); // Set exposure time in HODR
     if (result != DRV_SUCCESS)
     {
@@ -882,7 +1006,6 @@ static gboolean db_startAcquisition(Control *control, GDBusMethodInvocation *inv
 
     printf("Acquisition started successfully.\n");
 
-    // hodr_startAcquisitionOnceTemperatureStabilized(); // Start acquisition once temperature is stabilized
     //  generate a new spectrum ID
     uint32_t spectrumID = nTriggeredSpectra++; // Increment the captured spectra count to generate a new spectrum ID
 
@@ -892,8 +1015,6 @@ static gboolean db_startAcquisition(Control *control, GDBusMethodInvocation *inv
 
     control_complete_start_acquisition(control, invocation, spectrumID); // Complete the D-Bus method invocation
 
-    // printf("Data waiting loop started with function reference: %u\n", dataWaitFunctionRef);
-    // printf("Initiated data waiting loop.\n");
     return TRUE; // Successfully started acquisition
 }
 
@@ -972,13 +1093,7 @@ static gboolean db_getLastSpectrum(Control *control, GDBusMethodInvocation *invo
     // First token is spectrum ID, ignore it
     char token[64];
 
-    // char *firstToken = strtok(line, ","); // Get the first token (spectrum ID)
-    //  if (firstToken == NULL)
-    //  {
-    //      g_dbus_method_invocation_return_error(invocation, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Failed to parse spectrum ID from data file.");
-    //      printf("Failed to parse spectrum ID from data file.\n");
-    //      return FALSE; // Error parsing spectrum ID
-    //  }
+
 
     char *timeToken = strtok(line, ",");
 
@@ -1012,8 +1127,6 @@ static gboolean db_getLastSpectrum(Control *control, GDBusMethodInvocation *invo
     printf("Parsing data values...\n");
     // remaining tokens are data values, split by comma
 
-    // int32_t dataArray[xpixels]; // Array to hold data values
-    // int dataArrayCount = 0; // Count of data values
 
     // Get the rest of the line and split by comma
     char *dataToken;
@@ -1052,7 +1165,7 @@ static gboolean db_setWallclockAcquisitionInterval(Control *control, GDBusMethod
         pthread_mutex_unlock(&lock); // Unlock the mutex before returning
         return TRUE;                 // Invalid wallclock acquisition interval
     }
-    wallclockInterval = interval; // Set the wallclock acquisition interval
+    //guint wallclockInterval = interval; // Set the wallclock acquisition interval
 
     control_set_wallclock_interval(control, interval); // Set the wallclock acquisition interval property in the control object
 
@@ -1108,6 +1221,7 @@ static gboolean db_stopWallclockAcquisition(Control *control, GDBusMethodInvocat
         return TRUE;                                                             // Do not stop wallclock acquisition if Andor SDK is not active
     }
     control_set_wallclock_acquisition_active(control, FALSE); // Set the wallclock acquisition active property in the control object
+    printf("Removing timer source with ID: %u\n", timerHandle);
     g_source_remove(timerHandle);                             // Remove the timer source to stop wallclock acquisition
     timerHandle = 0;                                          // Reset the timer handle
 
@@ -1229,13 +1343,16 @@ int appendToFile(float *exposureTime, double *temperature, const int32_t *data, 
     return 0;
 }
 
-void adjustIntegrationTime(unsigned int targetIntensity, float exposureTime, int32_t *data, size_t size, unsigned int attemptLimit)
+void adjustIntegrationTime(Control *control, unsigned int targetIntensity, float exposureTime, int32_t *data, size_t size, unsigned int attemptLimit)
 {
 
     int32_t maxIntensity; // Variable to hold the maximum intensity found in the data
 
+    float previousIntegrationTime = 0; // Store the previous integration time for comparison
+
     while (true)
     {
+         
 
         if (targetIntensity == 0)
         {
@@ -1274,15 +1391,18 @@ void adjustIntegrationTime(unsigned int targetIntensity, float exposureTime, int
                 return; // If max intensity is within 10% of target intensity, keep the current integration time
             }
             newIntegrationTime = exposureTime * ((float)targetIntensity / (float)maxIntensity); // Adjust integration time based on target intensity
-            if (newIntegrationTime >= 900.0)
+            if (newIntegrationTime >= maximumIntegrationTime)
             {
              printf("Max integration time reached\n");
              attemptLimit = 1;
-             newIntegrationTime = 900.0;
-            } else if (newIntegrationTime <= 0.001) {
+             newIntegrationTime = maximumIntegrationTime;
+            } else if (newIntegrationTime <= minimumIntegrationTime) {
              printf("Min integration time reached\n");
              attemptLimit = 1;
-             newIntegrationTime = 0.001;
+             newIntegrationTime = minimumIntegrationTime;
+            } else if (exposureTime == previousIntegrationTime) {
+             printf("Integration time unchanged, must be at minimum, stopping adjustment\n");
+             attemptLimit = 1;
             }
 	    printf("Adjusted integration time based on target intensity: %.6f seconds\n", newIntegrationTime);
             fflush(stdout);
@@ -1300,14 +1420,26 @@ void adjustIntegrationTime(unsigned int targetIntensity, float exposureTime, int
 
 
         result = WaitForAcquisition(); // Wait for acquisition to finish before checking again
+
+
+        previousIntegrationTime = exposureTime; // Store the previous integration time for comparison
+        
         if (result != DRV_SUCCESS)
         {
             fprintf(stderr, "Error waiting for acquisition: %d\n", result);
             return; // Error waiting for acquisition
         }
+
+
+
+        
         result = hodr_getMostRecentImage(data, (size_t)xpixels); // Get the most recent image acquired
         float kineticCycleTime, readoutTime;
+
+
         hodr_getAcquisitionTimings(&exposureTime, &kineticCycleTime, &readoutTime); // Get acquisition timings
+        result = appendToFile(&exposureTime, &lastTemperature, data, xpixels); // Append data to output file
+        control_set_number_spectra(control, nCapturedSpectra);
 
 	attemptLimit -= 1;
         printf("Attempts: %d\n", attemptLimit);
@@ -1330,12 +1462,13 @@ void setNextAcquisition(int *timeoutID, Control *control) // Function to set the
         return;         // Do not proceed if Andor SDK is not active
     }
 
-    wallclockInterval = control_get_wallclock_interval(control); // Get the wallclock interval from the control object
+    guint wallclockInterval = control_get_wallclock_interval(control); // Get the wallclock interval from the control object
+    gboolean wallclockActive = control_get_wallclock_acquisition_active(control); // Get the wallclock acquisition active status from the control object
     printf("Current wallclock interval: %d minutes\n", wallclockInterval);
     fflush(stdout); // Flush stdout to ensure immediate output
-    if (wallclockInterval == 0)
+    if (wallclockInterval == 0 || !wallclockActive)
     {
-        printf("Acquisition schedule interval is not set. Cannot set next acquisition.\n");
+        printf("Acquisition schedule interval is not set.Not setting next acquisition.\n");
         fflush(stdout); // Flush stdout to ensure immediate output
         return;         // Do not proceed if acquisition schedule interval is not set
     }
@@ -1444,7 +1577,8 @@ void *handleAcquisitionLoop(void *arg) // Function to handle the acquisition loo
         fflush(stdout);
         printf("Acq. %d: Last temperature: %.2f\n", nCapturedSpectra + 1, lastTemperature); // Log the last temperature
         fflush(stdout);
-
+        result = appendToFile(&exposureTime, &lastTemperature, data, xpixels); // Append data to output file
+        control_set_number_spectra(control, nCapturedSpectra);
         unsigned int targetIntensity = control_get_target_intensity(control); // Get the target intensity from the control object
         printf("Target intensity: %d\n", targetIntensity);                    // Log the target intensity
         fflush(stdout);
@@ -1453,12 +1587,11 @@ void *handleAcquisitionLoop(void *arg) // Function to handle the acquisition loo
         {
             printf("Acq. %d: Target intensity: %d at integration time %.5fs\n", nCapturedSpectra + 1, targetIntensity, exposureTime); // Log the target intensity
             fflush(stdout);
-            adjustIntegrationTime(targetIntensity, exposureTime, data, xpixels, 5); // Adjust integration time based on target intensity
+            adjustIntegrationTime(control, targetIntensity, exposureTime, data, xpixels, 5); // Adjust integration time based on target intensity
         }
-
-        hodr_getAcquisitionTimings(&exposureTime, &kineticCycleTime, &readoutTime);     // Get acquisition timings
-        result = appendToFile(&exposureTime, &lastTemperature, data, xpixels); // Append data to output file
         control_set_number_spectra(control, nCapturedSpectra);
+        //hodr_getAcquisitionTimings(&exposureTime, &kineticCycleTime, &readoutTime);     // Get acquisition timings
+
         control_set_data_path(control, outFile);   // Set the data path in the control object
         setNextAcquisition(&timerHandle, control); // Set the next acquisition time based on the wallclock acquisition interval
         printf("Data appended to file. Result: %d, N captured spectra: %d\n", result, nCapturedSpectra);

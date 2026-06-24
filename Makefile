@@ -1,12 +1,13 @@
 CC=gcc
 include config.mk
 GDBUS_CFLAGS=$(shell pkg-config --cflags gio-2.0)
-INCLUDE=-I$(ANDOR_DIR)/include 
+#INCLUDE=-I$(ANDOR_DIR)/include 
 
 GDBUS_LDFLAGS=$(shell pkg-config --libs gio-2.0)
-LDFLAGS=-L$(ANDOR_DIR)/lib -landor $(GDBUS_LDFLAGS)
-
-CFLAGS=-Wall -Wextra -O2 $(INCLUDE) $(GDBUS_CFLAGS)
+#LDFLAGS=-L$(ANDOR_DIR)/lib -landor $(GDBUS_LDFLAGS)
+LDFLAGS=-landor $(GDBUS_LDFLAGS)
+#CFLAGS=-Wall -Wextra -O2 $(INCLUDE) $(GDBUS_CFLAGS)
+CFLAGS=-Wall -Wextra -O2 $(GDBUS_CFLAGS)
 TARGET=hodr
 SOURCE_DIR=src
 SOURCES=$(wildcard $(SOURCE_DIR)/*.c) 
@@ -14,7 +15,7 @@ DBUS_XML=$(SOURCE_DIR)/dbus_intro.xml
 
 all: $(TARGET)
 $(TARGET): $(SOURCES)
-	@$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 clean:
 	@rm -f $(TARGET) *.o
 

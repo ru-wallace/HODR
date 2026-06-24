@@ -75,3 +75,9 @@ unsigned int hodr_isTemperatureStabilized();
 unsigned int hodr_writeStatusToFIFO(const char *fifoPath);
 
 unsigned int secondsToNextHourFraction(uint32_t minutes);
+
+uint32_t getConfigValueString(const char *filePath, const char *key, char *value, size_t valueSize);
+uint32_t getConfigValueInt(const char *filePath, const char *key, int *value);
+uint32_t getConfigValueUnsignedInt(const char *filePath, const char *key, unsigned int *value);
+uint32_t getConfigValueFloat(const char *filePath, const char *key, float *value);
+uint32_t getConfigValueBool(const char *filePath, const char *key, bool *value);
