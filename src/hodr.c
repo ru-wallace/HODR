@@ -34,6 +34,8 @@ uint32_t initialTargetIntensity = 60000; // Target intensity for the acquisition
 float initialIntegrationTime = 0.01f; // Initial integration time for the acquisition
 float minimumIntegrationTime = 0.0f; // Minimum integration time for the acquisition
 float maximumIntegrationTime = 900.0f; // Maximum integration time for the acquisition
+
+uint32_t initialPreAmpGainIndex = 0; // Initial pre-amplifier gain index (0 for 1x, 1 for 1.7x)
 int32_t initialTargetTemperature = -70;      // Initial target temperature for the acquisition
 bool initialCoolerMode = true;                     // Initial cooler mode (true for ON, false for OFF)
 
@@ -48,7 +50,7 @@ char outFile[256]; // Output file for data
 
 int countLines();
 int createDataFile(char *directory, char *filename);
-int appendToFile(float *exposureTime, double *temperature, const int32_t *data, size_t size);
+int appendToFile(float *exposureTime, float *preAmpGain, double *temperature, const int32_t *data, size_t size);
 int readCommandThread(void *arg);
 static void dbusOnNameAcquired(GDBusConnection *connection, const gchar *name, gpointer user_data);
 
@@ -60,6 +62,7 @@ static gboolean db_setTemperature(Control *control, GDBusMethodInvocation *invoc
 static gboolean db_getTemperature(gpointer control);
 static gboolean db_updateNCaptures(gpointer control);
 static gboolean db_setIntegrationTime(Control *control, GDBusMethodInvocation *invocation, gdouble int_time, gpointer user_data);
+static gboolean db_setPreAmpGain(Control *control, GDBusMethodInvocation *invocation, gint32 value, gpointer user_data);
 static gboolean db_stopLive(Control *control, GDBusMethodInvocation *invocation, gpointer user_data);
 static gboolean db_exitMainLoop(Control *control, GDBusMethodInvocation *invocation, gpointer user_data);
 static gboolean db_startAcquisition(Control *control, GDBusMethodInvocation *invocation, gdouble integration_time, gdouble interval_time, guint mode, guint number, gpointer user_data);
@@ -80,6 +83,8 @@ void setNextAcquisition(int *timeoutID, Control *control); // Function to set th
 void *handleAcquisitionLoop();
 
 char dataDir[256] = "../hodr_data"; // Directory for data files
+
+const float preAmpGainValues[2] = {1.0, 1.7}; // Array of pre-amplifier gain values
 
 double lastTemperature = 0.0;       // Last temperature read from the device
 double lastTargetTemperature = 0.0; // Last target temperature set
@@ -220,6 +225,17 @@ void loadConfig()
         fflush(stdout); // Flush stdout to ensure immediate output
     }
 
+    if (getConfigValueUnsignedInt(initFile, "pre_amp_gain", &initialPreAmpGainIndex) == 0)
+    {
+        printf("Initial pre-amp gain read from config: %d\n", initialPreAmpGainIndex);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+    else
+    {
+        printf("Failed to read initial pre-amp gain from config, using default: %d\n", initialPreAmpGainIndex);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+
     if (getConfigValueBool(initFile, "cooler_mode", &initialCoolerMode) == 0)
     {
         printf("Initial cooler mode read from config: %s\n", initialCoolerMode ? "ON" : "OFF");
@@ -302,6 +318,7 @@ static void dbusOnNameAcquired(GDBusConnection *connection, const gchar *name, g
     g_signal_connect(control, "handle-set_wallclock_interval", G_CALLBACK(db_setWallclockAcquisitionInterval), NULL); // Connect the signal for setting wallclock acquisition interval
     g_signal_connect(control, "handle-start_wallclock_acquisition", G_CALLBACK(db_startWallclockAcquisition), NULL);  // Connect the signal for starting wallclock acquisition
     g_signal_connect(control, "handle-set_integration_time", G_CALLBACK(db_setIntegrationTime), NULL);                // Connect the signal for setting integration time
+    g_signal_connect(control, "handle-set_pre_amp_gain", G_CALLBACK(db_setPreAmpGain), NULL);                          // Connect the signal for setting preamp gain
     g_signal_connect(control, "handle-stop_acquisition", G_CALLBACK(db_stopAcquisition), NULL);                       // Connect the signal for stopping acquisition
     g_signal_connect(control, "handle-set_target_intensity", G_CALLBACK(db_setTargetIntensity), NULL);                // Connect the signal for setting target intensity
     g_signal_connect(control, "handle-set_interval", G_CALLBACK(db_setInterval), NULL);                               // Connect the signal for setting interval
@@ -324,6 +341,9 @@ static void dbusOnNameAcquired(GDBusConnection *connection, const gchar *name, g
 
     control_set_over_heat_reboot_count(control, 0);             // Initialize overheat reboot count to 0
 
+    gboolean preAmpGainSet = initialPreAmpGainIndex == 1;
+
+    control_set_pre_amp_gain(control, preAmpGainSet); // Set the initial pre-amp gain in the control object
 
     control_set_temperature(control, initialTargetTemperature); // Set the initial target temperature in the control object
 
@@ -407,6 +427,31 @@ static gboolean activateHodr(Control *control)
         g_timeout_add_seconds(1, (GSourceFunc)db_getTemperature, control); // Schedule next temperature check
         hodr_getDetectorSize(&xpixels, &ypixels);                          // Get detector size
         printf("Detector size: %d x %d pixels\n", xpixels, ypixels);
+
+        int preAmpGainIndex;
+        char gainString[32];
+        hodr_getCurrentPreAmpGain(&preAmpGainIndex, gainString);
+
+        float integrationTime, accumulate, kinetic;
+
+        result = GetAcquisitionTimings(&integrationTime, &accumulate, &kinetic);
+        if (result != DRV_SUCCESS)
+        {
+            fprintf(stderr, "Failed to get acquisition timings: %d\n", result);
+        } else
+        {
+            printf("Current Acquisition Timings - Exposure: %.6f s, Accumulate: %.6f s, Kinetic: %.6f s\n", integrationTime, accumulate, kinetic);
+            control_set_integration_time_secs(control, integrationTime); // Set the integration time in the control object
+        }
+
+
+        int numberPreAmpGains = 0;
+        GetNumberPreAmpGains(&numberPreAmpGains);
+        printf("Number of PreAmp Gains: %d\n", numberPreAmpGains);
+
+        printf("Current PreAmp Gain: %s (Index: %d)\n", gainString, preAmpGainIndex);
+
+        fflush(stdout); // Flush stdout to ensure immediate output
 
         if (control_get_wallclock_acquisition_active(control)) // Check if wallclock acquisition is active
         {
@@ -588,9 +633,13 @@ static gboolean db_setIntegrationTime(Control *control, GDBusMethodInvocation *i
         return TRUE;                                                       // Do not update if Andor SDK is not active
     }
     printf("Setting integration time to %.9f seconds...\n", int_time);
+    printf("Waiting for mutex lock to set integration time...\n");
+    fflush(stdout); // Flush stdout to ensure immediate output
     pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
+    printf("Mutex lock acquired for setting integration time.\n");
+    fflush(stdout); // Flush stdout to ensure immediate output
 
-    if (int_time <= 0)
+    if (int_time < 0)
     {
         g_dbus_method_invocation_return_error(invocation, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Invalid integration time: %.9f", int_time);
         pthread_mutex_unlock(&lock); // Unlock the mutex before returning
@@ -612,10 +661,46 @@ static gboolean db_setIntegrationTime(Control *control, GDBusMethodInvocation *i
             return TRUE;                 // Error setting integration time
         }
     }
+
+    float currentIntegrationTime;
+    float accumulateTime;
+    float kineticTime;
+    hodr_getAcquisitionTimings(&currentIntegrationTime, &accumulateTime, &kineticTime); // Get current acquisition timings
+
+    printf("Current integration time after setting: %.9f seconds\n", currentIntegrationTime);
+
+    control_set_integration_time_secs(control, currentIntegrationTime); // Update integration time in control object
+    fflush(stdout); // Flush stdout to ensure immediate output
     control_complete_set_integration_time(control, invocation, TRUE); // Complete the D-Bus method invocation with success
     printf("Integration time set to %.9f seconds successfully.\n", int_time);
     pthread_mutex_unlock(&lock); // Unlock the mutex after setting the integration time
     return TRUE;                 // Successfully set integration time
+}
+
+static gboolean db_setPreAmpGain(Control *control, GDBusMethodInvocation *invocation, gboolean value, gpointer)
+{
+
+    if (!andorActive) // Check if Andor SDK is active
+    {
+        printf("Andor SDK is not active. Not setting preamp gain.\n");
+        control_complete_set_pre_amp_gain(control, invocation, FALSE); // Complete the D-Bus method invocation with failure
+        return FALSE;                                                 // Do not update if Andor SDK is not active
+    }
+    printf("Setting preamp gain to index %d...\n", value);
+    pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
+
+    unsigned int result = hodr_setPreAmpGain((int)value); // Set preamp gain in HODR
+    if (result != DRV_SUCCESS)
+    {
+        control_complete_set_pre_amp_gain(control, invocation, FALSE); // Complete the D-Bus method invocation with failure
+        printf("Failed to set preamp gain: %d\n", result);
+        pthread_mutex_unlock(&lock); // Unlock the mutex before returning
+        return FALSE;                // Error setting preamp gain
+    }
+    control_complete_set_pre_amp_gain(control, invocation, TRUE); // Complete the D-Bus method invocation with success
+    printf("Preamp gain set to index %d successfully.\n", value);
+    pthread_mutex_unlock(&lock); // Unlock the mutex after setting the preamp gain
+    return TRUE;                 // Successfully set preamp gain
 }
 
 static gboolean db_setInterval(Control *control, GDBusMethodInvocation *invocation, gdouble interval, gpointer)
@@ -921,6 +1006,7 @@ static gboolean StartAcquisitionIfPossible(gpointer controlPtr)
 {
     Control *control = (Control *)controlPtr;
 
+    printf("Attempting to start acquisition...\n");
     if (!andorActive) // Check if Andor SDK is active
     {
         printf("Andor SDK is not active. Not starting acquisition.\n");
@@ -928,17 +1014,27 @@ static gboolean StartAcquisitionIfPossible(gpointer controlPtr)
         return false; // Do not start acquisition if Andor SDK is not active
     }
 
+
+
     pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
 
     hodr_setAcquisitionMode(AC_ACQMODE_SINGLE);               // Set acquisition mode to 1 (assuming this is a valid mode)
     control_set_acquisition_mode(control, AC_ACQMODE_SINGLE); // Set the acquisition mode in the control object
 
-    pthread_mutex_unlock(&lock);                   // Unlock the mutex before starting acquisition
+    
     unsigned int result = hodr_startAcquisition(); // Start acquisition in HODR
-
+    
+    pthread_mutex_unlock(&lock);                   // Unlock the mutex after starting acquisition
     if (result != DRV_SUCCESS)
     {
         fprintf(stderr, "Failed to start acquisition: %d\n", result);
+    } else
+    {
+        printf("Acquisition started successfully.\n");
+        fflush(stdout); // Flush stdout to ensure immediate output
+
+        nTriggeredSpectra++;
+        return true; // Successfully started acquisition
     }
 
     return false; // Failed to start acquisition
@@ -992,6 +1088,7 @@ static gboolean db_startAcquisition(Control *control, GDBusMethodInvocation *inv
     }
 
     printf("Starting acquisition...\n");
+    fflush(stdout); // Flush stdout to ensure immediate output
 
     unsigned int result = hodr_startAcquisition(); // Start acquisition in HODR
     if (result != DRV_SUCCESS)
@@ -1005,6 +1102,7 @@ static gboolean db_startAcquisition(Control *control, GDBusMethodInvocation *inv
     }
 
     printf("Acquisition started successfully.\n");
+    fflush(stdout); // Flush stdout to ensure immediate output
 
     //  generate a new spectrum ID
     uint32_t spectrumID = nTriggeredSpectra++; // Increment the captured spectra count to generate a new spectrum ID
@@ -1109,9 +1207,17 @@ static gboolean db_getLastSpectrum(Control *control, GDBusMethodInvocation *invo
 
     exposureTimeDouble = atof(token);
 
+    //fourth token is preamp gain as float
+    double preAmpGainDouble;
+    char *preAmpGainToken = strtok(NULL, ",");
+    printf("Preamp Gain token: %s\n", preAmpGainToken); // Log the preamp gain token
+    strcpy(token, preAmpGainToken);                     // Copy the token to a buffer
+    preAmpGainDouble = atof(token);
+    printf("Preamp Gain parsed: %.2f\n", preAmpGainDouble); // Log the parsed preamp gain
+
     double temperatureDouble;
 
-    // fourth token is temperature as float
+    // fifth token is temperature as float
     char *temperatureToken = strtok(NULL, ",");
 
     printf("Temperature token: %s\n", temperatureToken); // Log the temperature token
@@ -1144,7 +1250,7 @@ static gboolean db_getLastSpectrum(Control *control, GDBusMethodInvocation *invo
 
     printf("Creating response GVariant...\n");
     GVariant *response;
-    response = g_variant_new("(sddai)", timeToken, exposureTimeDouble, temperatureDouble, builder); // Create a response GVariant with timestamp, exposure time, temperature, and data array
+    response = g_variant_new("(sdddai)", timeToken, exposureTimeDouble, preAmpGainDouble, temperatureDouble, builder); // Create a response GVariant with timestamp, exposure time, temperature, and data array
 
     printf("Completing D-Bus method invocation...\n");
     control_complete_get_data(control, invocation, response); // Complete the D-Bus method invocation with the GVariant
@@ -1296,7 +1402,7 @@ int countLines()
     return counter;
 }
 
-int appendToFile(float *exposureTime, double *temperature, const int32_t *data, size_t size)
+int appendToFile(float *exposureTime, float *preAmpGain, double *temperature, const int32_t *data, size_t size)
 {
 
     createDataFile(dataDir, outFile);
@@ -1321,7 +1427,8 @@ int appendToFile(float *exposureTime, double *temperature, const int32_t *data, 
     strftime(timeString, sizeof(timeString), "%Y-%m-%dT%H:%M:%S", time_info);
     // fprintf(file, "%d,", spectrumID);      // Write spectrum ID
     fprintf(file, "%s,", timeString);      // Write timestamp
-    fprintf(file, "%.9f,", *exposureTime); // Write exposure time
+    fprintf(file, "%.5f,", *exposureTime); // Write exposure time
+    fprintf(file, "%.1f,", *preAmpGain);    // Write pre-amplifier gain
     fprintf(file, "%.2f,", *temperature);  // Write temperature
     for (size_t i = 0; i < size; i++)
     {
@@ -1438,7 +1545,14 @@ void adjustIntegrationTime(Control *control, unsigned int targetIntensity, float
 
 
         hodr_getAcquisitionTimings(&exposureTime, &kineticCycleTime, &readoutTime); // Get acquisition timings
-        result = appendToFile(&exposureTime, &lastTemperature, data, xpixels); // Append data to output file
+
+        int preAmpGainIndex;
+        char preAmpGainString[32]; // Buffer for pre-amplifier gain string
+        hodr_getCurrentPreAmpGain(&preAmpGainIndex, preAmpGainString); // Get the pre-amplifier gain index
+        float preAmpGain = preAmpGainValues[preAmpGainIndex]; // Get the pre-amplifier gain value based on the index
+
+
+        result = appendToFile(&exposureTime, &preAmpGain, &lastTemperature, data, xpixels); // Append data to output file
         control_set_number_spectra(control, nCapturedSpectra);
 
 	attemptLimit -= 1;
@@ -1574,10 +1688,18 @@ void *handleAcquisitionLoop(void *arg) // Function to handle the acquisition loo
         float exposureTime, kineticCycleTime, readoutTime;
         hodr_getAcquisitionTimings(&exposureTime, &kineticCycleTime, &readoutTime); // Get acquisition timings
         printf("Acq. %d: Acquisition timings - Exposure: %.6f, Kinetic Cycle: %.6f, Readout: %.6f\n", nCapturedSpectra + 1, exposureTime, kineticCycleTime, readoutTime);
+
+        int preAmpGainIndex;
+        char preAmpGainString[32]; // Buffer for pre-amplifier gain string
+
+        hodr_getCurrentPreAmpGain(&preAmpGainIndex, preAmpGainString); // Get the pre-amplifier gain index
+        float preAmpGain = preAmpGainValues[preAmpGainIndex]; // Get the pre-amplifier gain value based on the index
+
+
         fflush(stdout);
         printf("Acq. %d: Last temperature: %.2f\n", nCapturedSpectra + 1, lastTemperature); // Log the last temperature
         fflush(stdout);
-        result = appendToFile(&exposureTime, &lastTemperature, data, xpixels); // Append data to output file
+        result = appendToFile(&exposureTime, &preAmpGain, &lastTemperature, data, xpixels); // Append data to output file
         control_set_number_spectra(control, nCapturedSpectra);
         unsigned int targetIntensity = control_get_target_intensity(control); // Get the target intensity from the control object
         printf("Target intensity: %d\n", targetIntensity);                    // Log the target intensity

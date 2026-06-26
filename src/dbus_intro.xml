@@ -9,6 +9,7 @@
         <property name="TargetTemperature" type="d" access="read" />
         <property name="TemperatureStatus" type="s" access="read" />
         <property name="IntegrationTimeSecs" type="d" access="read" />
+        <property name="PreAmpGain" type="b" access="read" />
         <property name="acquisitionStatus" type="i" access="read" />
         <property name="acquisitionMode" type="u" access="read" />
         <property name="dataPath" type="s" access="read" />
@@ -18,6 +19,7 @@
         <property name="wallclockInterval" type="u" access="read" />
         <property name="wallclockAcquisitionActive" type="b" access="read" />
         <property name="wallclockNextCapture" type="u" access="read" />
+
         
         <property name="overHeatRebootCount" type="u" access="read" />
         <property name="overHeatCount" type="u" access="read" />
@@ -28,6 +30,8 @@
             <arg name="intensity" type="u" direction="in" />
             <arg name="result" type="b" direction="out" />
         </method>
+
+
 
         <method name="activate">
             <arg name="result" type="b" direction="out" />
@@ -50,12 +54,18 @@
             <arg name="mode" type="u" direction="in" />
             <arg name="result" type="b" direction="out" />
         </method>
+
         <method name="set_interval">
             <arg name="interval" type="d" direction="in" />
             <arg name="result" type="b" direction="out" />
         </method>
         <method name="set_integration_time">
             <arg name="integration_time" type="d" direction="in" />
+            <arg name="result" type="b" direction="out" />
+        </method>
+
+        <method name="set_pre_amp_gain">
+            <arg name="gain" type="b" direction="in" />
             <arg name="result" type="b" direction="out" />
         </method>
 
@@ -83,7 +93,7 @@
         <method name="stop_acquisition" />
 
         <method name="get_data">
-            <arg name="data" type="(sddai)" direction="out" />
+            <arg name="data" type="(sdddai)" direction="out" />
         </method>
         <method name="stop_live" />
         <method name="exit" />

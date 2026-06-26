@@ -533,6 +533,60 @@ unsigned int hodr_getAcqFlag()
     return cfg.ACQ_FLAG; // Return the acquisition flag
 }
 
+unsigned int hodr_getCurrentPreAmpGain(int *index, char *name)
+{
+    size_t nameSize = 30; // Manual says 30 bytes is the max length for the name string, so we will use that as the buffer size
+    unsigned int result = GetCurrentPreAmpGain(index, name, nameSize);
+    if (result != DRV_SUCCESS)
+    {
+        fprintf(stderr, "Failed to get current pre-amp gain: %d\n", result);
+        return result; // Error
+    }
+
+    return DRV_SUCCESS; // Success
+}
+
+unsigned int hodr_setPreAmpGain(int index)
+{
+    int nGainIndices;
+    unsigned int result = GetNumberPreAmpGains(&nGainIndices);
+    if (result != DRV_SUCCESS)
+    {
+        fprintf(stderr, "Failed to get number of pre-amp gains: %d\n", result);
+        return result; // Error
+    }
+
+    if (index < 0 || index >= nGainIndices)
+    {
+        fprintf(stderr, "Invalid pre-amp gain index: %d. Valid range is 0 to %d\n", index, nGainIndices - 1);
+        return DRV_P1INVALID; // Invalid index
+    }
+
+    result = SetPreAmpGain(index);
+    if (result != DRV_SUCCESS)
+    {
+        fprintf(stderr, "Failed to set pre-amp gain: %d\n", result);
+        return result; // Error
+    }
+
+    char gainName[32]; // Buffer to hold the gain name
+    result = hodr_getCurrentPreAmpGain(&index, gainName);
+    if (result == DRV_SUCCESS)
+    {
+        printf("Pre-amp gain set to index %d: %s\n", index, gainName);
+    }
+    else
+    {
+        fprintf(stderr, "Failed to retrieve current pre-amp gain after setting: %d\n", result);
+    }
+
+
+    return DRV_SUCCESS; // Success
+
+
+
+}
+
 
 unsigned int secondsToNextHourFraction(uint32_t minutes)
 {
