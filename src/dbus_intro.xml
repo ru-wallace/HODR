@@ -13,12 +13,15 @@
         <property name="acquisitionStatus" type="i" access="read" />
         <property name="acquisitionMode" type="u" access="read" />
         <property name="dataPath" type="s" access="read" />
+        <property name="readMode" type="i" access="read" />
         <property name="numberSpectra" type="u" access="read" />
         <property name="active" type="b" access="read" />
         <property name="targetIntensity" type="i" access="read" />
         <property name="wallclockInterval" type="u" access="read" />
         <property name="wallclockAcquisitionActive" type="b" access="read" />
         <property name="wallclockNextCapture" type="u" access="read" />
+        <property name="singleTrackCentre" type="u" access="read" />
+        <property name="singleTrackHeight" type="u" access="read" />
 
         
         <property name="overHeatRebootCount" type="u" access="read" />
@@ -28,6 +31,17 @@
 
         <method name="set_target_intensity">
             <arg name="intensity" type="u" direction="in" />
+            <arg name="result" type="b" direction="out" />
+        </method>
+
+        <method name="set_read_mode">
+            <arg name="mode" type="i" direction="in" />
+            <arg name="result" type="b" direction="out" />
+        </method>
+
+        <method name="set_single_track">
+            <arg name="centre" type="i" direction="in" />
+            <arg name="height" type="i" direction="in" />
             <arg name="result" type="b" direction="out" />
         </method>
 
@@ -84,6 +98,7 @@
 
         <method name="start_acquisition">
             <arg name="integration_time" type="d" direction="in" />
+            <arg name="pre_amp_gain" type="b" direction="in" />
             <arg name="interval_time" type="d" direction="in" />
             <arg name="acquisition_mode" type="u" direction="in" />
             <arg name="n_captures" type="u" direction="in" />

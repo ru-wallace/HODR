@@ -15,6 +15,8 @@
 typedef struct {
     int ACQUISITION_MODE;
     int READ_MODE;
+    int SINGLE_TRACK_HEIGHT; // Height of the single track used when read mode is set to 4 (Single Track)
+    int SINGLE_TRACK_CENTRE; // Centre of the single track used when read
     int COOLER_MODE; // 0 for OFF, 1 for ON
     int SHUTTER_TYPE;
     int SHUTTER_MODE; // 0 for fully auto, 1 for manual, etc.
@@ -34,6 +36,7 @@ typedef struct {
 unsigned int hodr_getDetectorSize(int *xpixels, int *ypixels);
 unsigned int hodr_init(char *andorPath, const char *outFile, bool resetConfig);
 unsigned int hodr_deinit();
+unsigned int hodr_shutDown();
 unsigned int hodr_setCoolerMode( bool mode);
 unsigned int hodr_getCurrentTemperatureFloat(float *temperature);
 unsigned int hodr_getCurrentTemperatureAndTargetTemperature(float *temperature, float *targetTemperature);
@@ -44,6 +47,8 @@ unsigned int hodr_getTemperatureRange(int *minTemp, int *maxTemp);
 unsigned int hodr_setTargetTemperature(int targetTemp);
 unsigned int hodr_setAcquisitionMode(int mode);
 unsigned int hodr_setReadMode(int mode);
+unsigned int hodr_setSingleTrack(int center, int height);
+unsigned int hodr_getSingleTrack(int *center, int *height);
 unsigned int hodr_setShutter(int type, int mode, int closingTime, int openingTime);
 unsigned int hodr_setNumberAccumulations(int number);
 unsigned int hodr_setNumberKinetics(int number);
@@ -66,7 +71,7 @@ unsigned int hodr_getAcqFlag();
 unsigned int hodr_getNumberAcquisitions();
 
 unsigned int hodr_getAcquisitionMode();
-unsigned int hodr_getReadMode();
+int hodr_getReadMode();
 unsigned int hodr_getShutterType();
 unsigned int hodr_setKineticCycleTime(float time);
 unsigned int hodr_getOutFile(char *outFile, size_t size);

@@ -22,6 +22,12 @@
 #define SHUTTER_TYP_OPEN_HIGH 1
 #define SHUTTER_MODE_FULLY_AUTO 0
 #define READ_MODE_FVB 0
+#define READ_MODE_MULTI_TRACK 1
+#define READ_MODE_RANDOM_TRACK 2
+#define READ_MODE_SINGLE_TRACK 3
+#define READ_MODE_IMAGE 4
+
+
 
 pthread_mutex_t lock;
 pthread_mutex_t endThreadLock;
@@ -31,13 +37,18 @@ bool endThread = false;              // Flag to signal the command thread to end
 
 uint32_t initialMode = 1; // Initial acquisition mode
 uint32_t initialTargetIntensity = 60000; // Target intensity for the acquisition
+uint32_t adjustmentAttemptLimit = 10; // Limit for adjustment attempts during acquisition
 float initialIntegrationTime = 0.01f; // Initial integration time for the acquisition
-float minimumIntegrationTime = 0.0f; // Minimum integration time for the acquisition
+float minimumIntegrationTime = 0.00001f; // Minimum integration time for the acquisition
 float maximumIntegrationTime = 900.0f; // Maximum integration time for the acquisition
 
 uint32_t initialPreAmpGainIndex = 0; // Initial pre-amplifier gain index (0 for 1x, 1 for 1.7x)
 int32_t initialTargetTemperature = -70;      // Initial target temperature for the acquisition
 bool initialCoolerMode = true;                     // Initial cooler mode (true for ON, false for OFF)
+
+int32_t initialReadMode = 0; // Initial read mode for the acquisition
+int32_t initialSingleTrackHeight = 20; // Initial single track height for the acquisition
+int32_t initialSingleTrackCentre = 10; // Initial single track centre for the acquisition
 
 bool initialWallclockActive = true; // Initial wallclock acquisition active status
 // Must be a factor of 60 to ensure proper timing repeating every hour.
@@ -50,7 +61,7 @@ char outFile[256]; // Output file for data
 
 int countLines();
 int createDataFile(char *directory, char *filename);
-int appendToFile(float *exposureTime, float *preAmpGain, double *temperature, const int32_t *data, size_t size);
+int appendToFile(float *exposureTime, float *preAmpGain, double *temperature, int *readMode, int *singleTrackHeight, int *singleTrackCentre, const int32_t *data, size_t size);
 int readCommandThread(void *arg);
 static void dbusOnNameAcquired(GDBusConnection *connection, const gchar *name, gpointer user_data);
 
@@ -63,9 +74,11 @@ static gboolean db_getTemperature(gpointer control);
 static gboolean db_updateNCaptures(gpointer control);
 static gboolean db_setIntegrationTime(Control *control, GDBusMethodInvocation *invocation, gdouble int_time, gpointer user_data);
 static gboolean db_setPreAmpGain(Control *control, GDBusMethodInvocation *invocation, gint32 value, gpointer user_data);
+static gboolean db_setReadMode(Control *control, GDBusMethodInvocation *invocation, gint32 mode, gpointer user_data);
+static gboolean db_setSingleTrack(Control *control, GDBusMethodInvocation *invocation, gint32 centre, gint32 height, gpointer user_data);
 static gboolean db_stopLive(Control *control, GDBusMethodInvocation *invocation, gpointer user_data);
 static gboolean db_exitMainLoop(Control *control, GDBusMethodInvocation *invocation, gpointer user_data);
-static gboolean db_startAcquisition(Control *control, GDBusMethodInvocation *invocation, gdouble integration_time, gdouble interval_time, guint mode, guint number, gpointer user_data);
+static gboolean db_startAcquisition(Control *control, GDBusMethodInvocation *invocation, gdouble integration_time, gboolean pre_amp_gain, gdouble interval_time, guint mode, guint number, gpointer user_data);
 static gboolean db_setAcquisitionMode(Control *control, GDBusMethodInvocation *invocation, guint32 mode, gpointer user_data);
 static gboolean db_stopAcquisition(Control *control, GDBusMethodInvocation *invocation, gpointer user_data);
 static gboolean db_setInterval(Control *control, GDBusMethodInvocation *invocation, gdouble interval, gpointer user_data);
@@ -75,7 +88,9 @@ static gboolean db_startWallclockAcquisition(Control *control, GDBusMethodInvoca
 static gboolean db_stopWallclockAcquisition(Control *control, GDBusMethodInvocation *invocation, gpointer user_data);
 static gboolean db_setWallclockAcquisitionInterval(Control *control, GDBusMethodInvocation *invocation, guint interval, gpointer user_data);
 
+
 static gboolean StartAcquisitionIfPossible(gpointer controlPtr);
+static gboolean StartAcquisitionIfPossibleWallclock(gpointer controlPtr);
 
 void setNextAcquisition(int *timeoutID, Control *control); // Function to set the next acquisition
 // static gboolean db_getData(Control *control, GDBusMethodInvocation *invocation, gint ref, gpointer user_data);
@@ -116,6 +131,7 @@ void signalHandler(int signal)
 
         fflush(stdout);         // Flush stdout to ensure all output is printed
         endThread = true;       // Set the flag to end the command thread
+        AbortAcquisition(); // Abort any ongoing acquisition
         CancelWait();           // Cancel any ongoing wait operations
         g_main_loop_quit(loop); // Quit the main loop
         hodr_deinit();          // Deinitialize HODR
@@ -292,12 +308,65 @@ void loadConfig()
         fflush(stdout); // Flush stdout to ensure immediate output
     }
 
+    if (getConfigValueUnsignedInt(initFile, "adjustment_attempt_limit", &adjustmentAttemptLimit) == 0)
+    {
+        printf("Adjustment attempt limit read from config: %u\n", adjustmentAttemptLimit);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+    else
+    {
+        printf("Failed to read adjustment attempt limit from config, using default: %u\n", adjustmentAttemptLimit);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
 
-    printf("Configuration loaded:\n\tmode=%u\n\ttarget_temperature=%d\n\ttarget_intensity=%u\n\tintegration_time=%f\n\tcooler_mode=%s\n\twallclock_interval=%u\n\twallclock_active=%s\n",
-              initialMode, initialTargetTemperature, initialTargetIntensity, initialIntegrationTime, initialCoolerMode ? "ON" : "OFF", initialWallclockInterval, initialWallclockActive ? "ACTIVE" : "INACTIVE");
+    if (getConfigValueInt(initFile, "read_mode", &initialReadMode) == 0)
+    {
+        printf("Read mode read from config: %u\n", initialReadMode);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+    else
+    {
+        printf("Failed to read read mode from config, using default: %u\n", initialReadMode);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+
+    if (getConfigValueInt(initFile, "single_track_height", &initialSingleTrackHeight) == 0)
+    {
+        printf("Single track height read from config: %u\n", initialSingleTrackHeight);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+    else
+    {
+        printf("Failed to read single track height from config, using default: %u\n", initialSingleTrackHeight);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+
+    if (getConfigValueInt(initFile, "single_track_centre", &initialSingleTrackCentre) == 0)
+    {
+        printf("Single track centre read from config: %u\n", initialSingleTrackCentre);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
+    else
+    {
+        printf("Failed to read single track centre from config, using default: %u\n", initialSingleTrackCentre);
+        fflush(stdout); // Flush stdout to ensure immediate output
+    }
 
 
+    printf("Configuration loaded:\n\tmode=%u\n\ttarget_temperature=%d\n\ttarget_intensity=%u\n\tintegration_time=%f\n\tcooler_mode=%s\n\twallclock_interval=%u\n\twallclock_active=%s\n\tread_mode=%u\n\tsingle_track_height=%u\n\tsingle_track_centre=%u\n",
+            initialMode, 
+            initialTargetTemperature, 
+            initialTargetIntensity, 
+            initialIntegrationTime, 
+            initialCoolerMode ? "ON" : "OFF", 
+            initialWallclockInterval, 
+            initialWallclockActive ? "ACTIVE" : "INACTIVE",
+            initialReadMode,
+            initialSingleTrackHeight,
+            initialSingleTrackCentre
 
+            );
+              
 }
 
 
@@ -319,6 +388,8 @@ static void dbusOnNameAcquired(GDBusConnection *connection, const gchar *name, g
     g_signal_connect(control, "handle-start_wallclock_acquisition", G_CALLBACK(db_startWallclockAcquisition), NULL);  // Connect the signal for starting wallclock acquisition
     g_signal_connect(control, "handle-set_integration_time", G_CALLBACK(db_setIntegrationTime), NULL);                // Connect the signal for setting integration time
     g_signal_connect(control, "handle-set_pre_amp_gain", G_CALLBACK(db_setPreAmpGain), NULL);                          // Connect the signal for setting preamp gain
+    g_signal_connect(control, "handle-set_read_mode", G_CALLBACK(db_setReadMode), NULL);                              // Connect the signal for setting read mode
+    g_signal_connect(control, "handle-set_single_track", G_CALLBACK(db_setSingleTrack), NULL);                        // Connect the signal for setting single track parameters
     g_signal_connect(control, "handle-stop_acquisition", G_CALLBACK(db_stopAcquisition), NULL);                       // Connect the signal for stopping acquisition
     g_signal_connect(control, "handle-set_target_intensity", G_CALLBACK(db_setTargetIntensity), NULL);                // Connect the signal for setting target intensity
     g_signal_connect(control, "handle-set_interval", G_CALLBACK(db_setInterval), NULL);                               // Connect the signal for setting interval
@@ -424,9 +495,13 @@ static gboolean activateHodr(Control *control)
         control_set_over_heat_cooldown_active(control, FALSE);             // Set cooldown active in the control object
         float targetTemp = control_get_target_temperature(control);        // Get target temperature from control object
         hodr_setTargetTemperature(targetTemp);                             // Set target temperature in HODR
+        printf("Target temperature set to: %.2f\n", targetTemp);
+        fflush(stdout);                                                     // Flush stdout to ensure immediate output
         g_timeout_add_seconds(1, (GSourceFunc)db_getTemperature, control); // Schedule next temperature check
         hodr_getDetectorSize(&xpixels, &ypixels);                          // Get detector size
         printf("Detector size: %d x %d pixels\n", xpixels, ypixels);
+
+        hodr_setPreAmpGain(control_get_pre_amp_gain(control) ? 1 : 0); // Set pre-amp gain based on control object
 
         int preAmpGainIndex;
         char gainString[32];
@@ -444,6 +519,8 @@ static gboolean activateHodr(Control *control)
             control_set_integration_time_secs(control, integrationTime); // Set the integration time in the control object
         }
 
+        hodr_setReadMode(initialReadMode); // Set read mode to Full Vertical Binning
+        hodr_setSingleTrack(initialSingleTrackCentre, initialSingleTrackHeight); // Set single track parameters
 
         int numberPreAmpGains = 0;
         GetNumberPreAmpGains(&numberPreAmpGains);
@@ -462,6 +539,11 @@ static gboolean activateHodr(Control *control)
         {
             printf("Wallclock acquisition is not active.\n");
         }
+
+
+        int status;
+        hodr_getStatus(&status); // Get the current acquisition status from HOD
+        control_set_acquisition_status(control, status); // Set the acquisition status in the control object
 
         pthread_create(&acqThread, NULL, handleAcquisitionLoop, control); // Create a thread for handling acquisition loop
 
@@ -484,7 +566,7 @@ static gboolean db_activateHodr(Control *control, GDBusMethodInvocation *invocat
         return TRUE;                                          // HODR is already active
     }
 
-    printf("Activating HODR...\n");
+    printf("Activating HODR from DBUS call...\n");
     fflush(stdout);                                       // Flush stdout to ensure immediate output
     activateHodr(control);                                // Activate HODR
     control_complete_activate(control, invocation, TRUE); // Complete the D-Bus method invocation
@@ -505,6 +587,13 @@ static gboolean db_deactivateHodr(Control *control, GDBusMethodInvocation *invoc
     printf("Deactivating HODR...\n");
     CancelWait();                        // Cancel any ongoing wait operations
     AbortAcquisition();                  // Abort any ongoing acquisition
+
+    
+    int status;
+    hodr_getStatus(&status); // Get the current acquisition status from HOD
+    control_set_acquisition_status(control, status); // Set the acquisition status in the control object
+
+    g_source_remove(timerHandle); // Remove the timer for wallclock acquisition
     unsigned int result = hodr_deinit(); // Deinitialize HODR
     if (result != DRV_SUCCESS)
     {
@@ -584,13 +673,22 @@ static gboolean db_stopLive(Control *control, GDBusMethodInvocation *invocation,
     return TRUE; // Successfully stopped live mode
 }
 
+bool captureCountPrinted = false; // Flag to indicate if the capture count has been printed already since SDK became inactive
+
 static gboolean db_updateNCaptures(gpointer control)
 {
     if (!andorActive) // Check if Andor SDK is active
     {
-        printf("Andor SDK is not active. Skipping update of number of captures.\n");
+        if (!captureCountPrinted) // Check if the capture count has already been printed
+        {
+            printf("Andor SDK is not active. Skipping update of number of captures.\n");
+            fflush(stdout); // Flush stdout to ensure immediate output
+            captureCountPrinted = true; // Set the flag to indicate that the message has been printed
+        }
+        
         return TRUE; // Do not update if Andor SDK is not active
     }
+    captureCountPrinted = false; // Reset the flag if Andor SDK is active
 
     if (control == NULL)
     {
@@ -672,9 +770,66 @@ static gboolean db_setIntegrationTime(Control *control, GDBusMethodInvocation *i
     control_set_integration_time_secs(control, currentIntegrationTime); // Update integration time in control object
     fflush(stdout); // Flush stdout to ensure immediate output
     control_complete_set_integration_time(control, invocation, TRUE); // Complete the D-Bus method invocation with success
-    printf("Integration time set to %.9f seconds successfully.\n", int_time);
+    printf("Integration time set to %.9f seconds successfully.\n", currentIntegrationTime);
     pthread_mutex_unlock(&lock); // Unlock the mutex after setting the integration time
     return TRUE;                 // Successfully set integration time
+}
+
+static gboolean db_setReadMode(Control *control, GDBusMethodInvocation *invocation, gint32 mode, gpointer)
+{
+
+    if (!andorActive) // Check if Andor SDK is active
+    {
+        printf("Andor SDK is not active. Not setting read mode.\n");
+        control_complete_set_read_mode(control, invocation, FALSE); // Complete the D-Bus method invocation with failure
+        return FALSE;                                               // Do not update if Andor SDK is not active
+    }
+    printf("Setting read mode to %d...\n", mode);
+    pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
+
+    unsigned int result = hodr_setReadMode(mode); // Set read mode in HODR
+    
+    if (result != DRV_SUCCESS)
+    {
+        control_complete_set_read_mode(control, invocation, FALSE); // Complete the D-Bus method invocation with failure
+        printf("Failed to set read mode: %d\n", result);
+        pthread_mutex_unlock(&lock); // Unlock the mutex before returning
+        return FALSE;                // Error setting read mode
+    }
+
+    hodr_setSingleTrack(10, 20); // Set single track parameters in HODR (example values)
+
+    control_set_read_mode(control, mode); // Update read mode in control object
+    control_complete_set_read_mode(control, invocation, TRUE); // Complete the D-Bus method invocation with success
+    printf("Read mode set to %d successfully.\n", mode);
+    pthread_mutex_unlock(&lock); // Unlock the mutex after setting the read mode
+    return TRUE;                 // Successfully set read mode
+}
+
+static gboolean db_setSingleTrack(Control *control, GDBusMethodInvocation *invocation, gint32 centre, gint32 height, gpointer)
+{
+
+    if (!andorActive) // Check if Andor SDK is active
+    {
+        printf("Andor SDK is not active. Not setting single track.\n");
+        control_complete_set_single_track(control, invocation, FALSE); // Complete the D-Bus method invocation with failure
+        return FALSE;                                                  // Do not update if Andor SDK is not active
+    }
+    printf("Setting single track centre: %d and height: %d...\n", centre, height);
+    pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
+
+    unsigned int result = hodr_setSingleTrack((int)centre, (int)height); // Set single track in HODR
+    if (result != DRV_SUCCESS)
+    {
+        control_complete_set_single_track(control, invocation, FALSE); // Complete the D-Bus method invocation with failure
+        printf("Failed to set single track: %d\n", result);
+        pthread_mutex_unlock(&lock); // Unlock the mutex before returning
+        return FALSE;                // Error setting single track
+    }
+    control_complete_set_single_track(control, invocation, TRUE); // Complete the D-Bus method invocation with success
+    printf("Single track set from %d to %d successfully.\n", centre, height);
+    pthread_mutex_unlock(&lock); // Unlock the mutex after setting the single track
+    return TRUE;                 // Successfully set single track
 }
 
 static gboolean db_setPreAmpGain(Control *control, GDBusMethodInvocation *invocation, gboolean value, gpointer)
@@ -687,6 +842,7 @@ static gboolean db_setPreAmpGain(Control *control, GDBusMethodInvocation *invoca
         return FALSE;                                                 // Do not update if Andor SDK is not active
     }
     printf("Setting preamp gain to index %d...\n", value);
+    fflush(stdout); // Flush stdout to ensure immediate output
     pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
 
     unsigned int result = hodr_setPreAmpGain((int)value); // Set preamp gain in HODR
@@ -694,11 +850,13 @@ static gboolean db_setPreAmpGain(Control *control, GDBusMethodInvocation *invoca
     {
         control_complete_set_pre_amp_gain(control, invocation, FALSE); // Complete the D-Bus method invocation with failure
         printf("Failed to set preamp gain: %d\n", result);
+        fflush(stdout);                // Flush stdout to ensure immediate output
         pthread_mutex_unlock(&lock); // Unlock the mutex before returning
         return FALSE;                // Error setting preamp gain
     }
     control_complete_set_pre_amp_gain(control, invocation, TRUE); // Complete the D-Bus method invocation with success
     printf("Preamp gain set to index %d successfully.\n", value);
+    fflush(stdout); // Flush stdout to ensure immediate output
     pthread_mutex_unlock(&lock); // Unlock the mutex after setting the preamp gain
     return TRUE;                 // Successfully set preamp gain
 }
@@ -733,6 +891,13 @@ static gboolean db_setInterval(Control *control, GDBusMethodInvocation *invocati
     control_complete_set_interval(control, invocation, TRUE); // Complete the D-Bus method invocation
     printf("Interval set to %.5f seconds successfully.\n", (float)interval);
     pthread_mutex_unlock(&lock); // Unlock the mutex after setting the interval
+
+
+    
+    int status;
+    hodr_getStatus(&status); // Get the current acquisition status from HOD
+    control_set_acquisition_status(control, status); // Set the acquisition status in the control object
+
     return TRUE;                 // Successfully set interval
 }
 static gboolean db_setAcquisitionMode(Control *control, GDBusMethodInvocation *invocation, guint32 mode, gpointer)
@@ -790,6 +955,8 @@ static gboolean db_setTargetIntensity(Control *control, GDBusMethodInvocation *i
     return TRUE;                 // Successfully set target intensity
 }
 
+bool temperatureReported = false; // Flag to indicate if temperature has been reported while Andor SDK is inactive
+
 static gboolean db_getTemperature(gpointer control)
 {
 
@@ -809,9 +976,16 @@ static gboolean db_getTemperature(gpointer control)
 
     if (!andorActive) // Check if Andor SDK is active
     {
-        printf("Andor SDK is not active. Not getting temperature.\n");
+        if (!temperatureReported) // Check if temperature has already been reported while Andor SDK is inactive
+        {
+            printf("Andor SDK is not active. Not getting temperature.\n");
+            fflush(stdout); // Flush stdout to ensure immediate output
+            temperatureReported = true; // Set the flag to indicate that the message has been printed
+        }
         return TRUE; // Do not update if Andor SDK is not active
     }
+    temperatureReported = false; // Reset the flag since Andor SDK is active
+
     pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
     float currentTemp, targetTemp;
 
@@ -906,6 +1080,11 @@ static gboolean db_getTemperature(gpointer control)
 
     int tempStatus;
     hodr_getCurrentTemperatureStatus(&tempStatus); // Get current temperature status
+
+    
+    int status;
+    hodr_getStatus(&status); // Get the current acquisition status from HOD
+    control_set_acquisition_status(control, status); // Set the acquisition status in the control object
 
     if (currentTempDouble != lastTemperature ||
         targetTempDouble != lastTargetTemperature || tempStatus != lastTemperatureStatus) // Check if temperatures or status have changed
@@ -1007,6 +1186,7 @@ static gboolean StartAcquisitionIfPossible(gpointer controlPtr)
     Control *control = (Control *)controlPtr;
 
     printf("Attempting to start acquisition...\n");
+    fflush(stdout); // Flush stdout to ensure immediate output
     if (!andorActive) // Check if Andor SDK is active
     {
         printf("Andor SDK is not active. Not starting acquisition.\n");
@@ -1023,6 +1203,11 @@ static gboolean StartAcquisitionIfPossible(gpointer controlPtr)
 
     
     unsigned int result = hodr_startAcquisition(); // Start acquisition in HODR
+
+    
+    int status;
+    hodr_getStatus(&status); // Get the current acquisition status from HOD
+    control_set_acquisition_status(control, status); // Set the acquisition status in the control object
     
     pthread_mutex_unlock(&lock);                   // Unlock the mutex after starting acquisition
     if (result != DRV_SUCCESS)
@@ -1040,7 +1225,59 @@ static gboolean StartAcquisitionIfPossible(gpointer controlPtr)
     return false; // Failed to start acquisition
 }
 
-static gboolean db_startAcquisition(Control *control, GDBusMethodInvocation *invocation, gdouble integration_time, gdouble interval_time, guint mode, guint number, gpointer)
+static gboolean StartAcquisitionIfPossibleWallclock(gpointer controlPtr)
+{
+    Control *control = (Control *)controlPtr;
+
+    printf("Attempting to start acquisition in wallclock mode...\n");
+    fflush(stdout); // Flush stdout to ensure immediate output
+    if (!andorActive) // Check if Andor SDK is active
+    {
+        printf("Andor SDK is not active. Not starting acquisition.\n");
+
+        return false; // Do not start acquisition if Andor SDK is not active
+    }
+
+
+    if (!control_get_wallclock_acquisition_active(control)) // Check if wallclock acquisition is active
+    {
+        printf("Wallclock acquisition is not active. Not starting acquisition.\n");
+        fflush(stdout); // Flush stdout to ensure immediate output
+        return false; // Do not start acquisition if wallclock acquisition is not active
+    }
+
+    pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
+
+    hodr_setAcquisitionMode(AC_ACQMODE_SINGLE);               // Set acquisition mode to 1 (assuming this is a valid mode)
+    control_set_acquisition_mode(control, AC_ACQMODE_SINGLE); // Set the acquisition mode in the control object
+
+    //g_source_remove(timerHandle);                 // Remove the existing timer to prevent multiple acquisitions
+
+    unsigned int result = hodr_startAcquisition(); // Start acquisition in HODR
+
+    
+    int status;
+    hodr_getStatus(&status); // Get the current acquisition status from HOD
+    control_set_acquisition_status(control, status); // Set the acquisition status in the control object
+
+    pthread_mutex_unlock(&lock);                   // Unlock the mutex after starting acquisition
+    if (result != DRV_SUCCESS)
+    {
+        fprintf(stderr, "Failed to start acquisition: %d\n", result);
+    } else
+    {
+        printf("Acquisition started successfully in wallclock mode.\n");
+        fflush(stdout); // Flush stdout to ensure immediate output
+
+        nTriggeredSpectra++;
+        return true; // Successfully started acquisition
+    }
+
+    return false; // Failed to start acquisition
+}
+
+
+static gboolean db_startAcquisition(Control *control, GDBusMethodInvocation *invocation, gdouble integration_time, gboolean pre_amp_gain, gdouble interval_time, guint mode, guint number, gpointer)
 {
 
     if (!andorActive) // Check if Andor SDK is active
@@ -1061,6 +1298,15 @@ static gboolean db_startAcquisition(Control *control, GDBusMethodInvocation *inv
         hodr_setExposureTime(integration_time);                       // Set exposure time in seconds
         control_set_integration_time_secs(control, integration_time); // Set integration time in the control object
     }
+
+    int readmode = hodr_getReadMode(); // Get the current read mode from HOD
+    printf("Current read mode: %d\n", readmode);
+
+
+    control_set_pre_amp_gain(control, pre_amp_gain); // Set preamp gain in the control object
+    hodr_setPreAmpGain((int)pre_amp_gain); // Set preamp gain in HODR
+
+
 
     if (mode > 5) // Assuming valid modes are 0, 1, and 2
     {
@@ -1091,6 +1337,13 @@ static gboolean db_startAcquisition(Control *control, GDBusMethodInvocation *inv
     fflush(stdout); // Flush stdout to ensure immediate output
 
     unsigned int result = hodr_startAcquisition(); // Start acquisition in HODR
+
+    int status;
+    hodr_getStatus(&status); // Get the current acquisition status from HODR
+
+    control_set_acquisition_status(control, status); // Set the acquisition status in the control object
+
+
     if (result != DRV_SUCCESS)
     {
         fprintf(stderr, "Failed to start acquisition: %d\n", result);
@@ -1122,6 +1375,10 @@ static gboolean db_stopAcquisition(Control *control, GDBusMethodInvocation *invo
     pthread_mutex_lock(&lock); // Lock the mutex to ensure thread safety
     printf("Acquired lock for stopping acquisition.\n");
     unsigned int result = hodr_abortAcquisition(); // Abort acquisition in HODR
+
+    int status;
+    hodr_getStatus(&status); // Get the current acquisition status from HOD
+    control_set_acquisition_status(control, status); // Set the acquisition status in the control object
     if (result != DRV_SUCCESS)
     {
         fprintf(stderr, "Failed to abort acquisition: %d\n", result);
@@ -1155,6 +1412,10 @@ static gboolean db_getLastSpectrum(Control *control, GDBusMethodInvocation *invo
     pthread_mutex_lock(&dataFileLock); // Lock the mutex for data file operations
     printf("Acquired lock for reading data file.\n");
     fflush(stdout);
+    
+    int status;
+    hodr_getStatus(&status); // Get the current acquisition status from HOD
+    control_set_acquisition_status(control, status); // Set the acquisition status in the control object
 
     FILE *file = fopen(outFile, "r");
     if (file == NULL)
@@ -1364,7 +1625,7 @@ int createDataFile(char *directory, char *filename)
         fprintf(stderr, "Error creating file %s: %s\n", filename, strerror(errno));
         return -1; // Error creating file
     }
-
+    fclose(file);
     return filepathLength; // Return the length of the file path
 }
 
@@ -1402,7 +1663,7 @@ int countLines()
     return counter;
 }
 
-int appendToFile(float *exposureTime, float *preAmpGain, double *temperature, const int32_t *data, size_t size)
+int appendToFile(float *exposureTime, float *preAmpGain, double *temperature, int *readMode, int *singleTrackHeight, int *singleTrackCentre, const int32_t *data, size_t size)
 {
 
     createDataFile(dataDir, outFile);
@@ -1430,6 +1691,15 @@ int appendToFile(float *exposureTime, float *preAmpGain, double *temperature, co
     fprintf(file, "%.5f,", *exposureTime); // Write exposure time
     fprintf(file, "%.1f,", *preAmpGain);    // Write pre-amplifier gain
     fprintf(file, "%.2f,", *temperature);  // Write temperature
+    fprintf(file, "%d,", *readMode);         // Write read mode
+    if (*readMode == READ_MODE_SINGLE_TRACK)
+    {
+        fprintf(file, "%d,", *singleTrackHeight); // Write single track height if in single track mode
+        fprintf(file, "%d,", *singleTrackCentre); // Write single track centre if in single track mode
+    } else
+    {
+        fprintf(file, ",,"); // Write empty values for single track height and centre if not in single track mode
+    }
     for (size_t i = 0; i < size; i++)
     {
         fprintf(file, "%d", data[i]);
@@ -1479,13 +1749,34 @@ void adjustIntegrationTime(Control *control, unsigned int targetIntensity, float
             }
         }
 
-        printf("Max intensity from data: %d\n", maxIntensity);
+        printf("Max intensity from data: %d at integration time %.6f\n", maxIntensity, exposureTime);
+        printf("Max integration time: %.6f seconds, Min integration time: %.6f seconds\n", maximumIntegrationTime, minimumIntegrationTime);
         float newIntegrationTime = exposureTime; // Initialize new integration time with the current exposure time
         if (maxIntensity >= 65534)
         {
             newIntegrationTime *= 0.5; // Reduce integration time by half if max intensity is too high
+            newIntegrationTime = (newIntegrationTime < minimumIntegrationTime) ? minimumIntegrationTime : newIntegrationTime; // Ensure new integration time is not below minimum
+            if (exposureTime <= minimumIntegrationTime)
+            {
+
+                hodr_setReadMode(READ_MODE_SINGLE_TRACK); // Set read mode to 2  Single Track(assuming this is a valid mode)
+                
+
+                int centre, height;
+
+                int readMode =hodr_getReadMode(); // Get the current read mode from HODR
+                hodr_getSingleTrack(&centre, &height); // Get the current Single Track settings
+
+
+
+                printf("Integration time is already at minimum. Cannot reduce further.\n");
+                printf("Setting read mode to Single Track with centre at %d and height of %d\n", centre, height);
+                printf("Current read mode: %d\n", readMode);
+                fflush(stdout);
+            }
             printf("Max intensity too high, reducing integration time to %.6f seconds\n", newIntegrationTime);
             fflush(stdout);
+
         }
         else
         {
@@ -1498,6 +1789,17 @@ void adjustIntegrationTime(Control *control, unsigned int targetIntensity, float
                 return; // If max intensity is within 10% of target intensity, keep the current integration time
             }
             newIntegrationTime = exposureTime * ((float)targetIntensity / (float)maxIntensity); // Adjust integration time based on target intensity
+
+            int readMode = hodr_getReadMode(); // Get the current read mode from HODR
+            printf("Current read mode: %d\n", readMode);
+            if (newIntegrationTime > 1.5 * exposureTime && readMode == READ_MODE_SINGLE_TRACK) // If new integration time is significantly higher and read mode is Full Vertical Binning
+            {
+                printf("Max intensity too low, changing read mode to Full Vertical Binning to increase sensitivity.\n");
+                hodr_setReadMode(READ_MODE_FVB); // Set read mode to 1 Full Vertical Binning (assuming this is a valid mode)
+                int newReadMode =  hodr_getReadMode(); // Get the new read mode from HODR
+                printf("New read mode: %d\n", newReadMode);
+            }
+
             if (newIntegrationTime >= maximumIntegrationTime)
             {
              printf("Max integration time reached\n");
@@ -1511,20 +1813,37 @@ void adjustIntegrationTime(Control *control, unsigned int targetIntensity, float
              printf("Integration time unchanged, must be at minimum, stopping adjustment\n");
              attemptLimit = 1;
             }
-	    printf("Adjusted integration time based on target intensity: %.6f seconds\n", newIntegrationTime);
+	        printf("Adjusted integration time based on target intensity: %.6f seconds\n", newIntegrationTime);
             fflush(stdout);
         }
 
-        hodr_abortAcquisition();
+        //hodr_abortAcquisition();
+
+        printf("Setting new integration time: %.6f seconds\n", newIntegrationTime);
         unsigned int result = hodr_setExposureTime(newIntegrationTime); // Set the new exposure time in HODR
+        float exposureTimeResult, kineticCycleTime, readoutTime;
+
+        hodr_getAcquisitionTimings(&exposureTimeResult, &kineticCycleTime, &readoutTime); // Get acquisition timings
+
+        if (exposureTimeResult / newIntegrationTime > 1.05) 
+        {
+            printf("Warning: Actual exposure time %.6f seconds differs from requested %.6f seconds by more than 5%%\n", exposureTimeResult, newIntegrationTime);
+            fflush(stdout);
+            printf("Attempting to set correct exposure time by subtracting minimum integration time: %.6f seconds\n", newIntegrationTime - minimumIntegrationTime);
+            hodr_setExposureTime(newIntegrationTime - minimumIntegrationTime); // Set the exposure time to the actual value returned by HODR
+            hodr_getAcquisitionTimings(&exposureTimeResult, &kineticCycleTime, &readoutTime); // Get acquisition timings again
+            printf("New exposure time after adjustment: %.6f seconds\n", exposureTimeResult);
+        }
+
         
         result = hodr_startAcquisition(); // Restart acquisition with the new exposure time
         if (result != DRV_SUCCESS)
         {
             fprintf(stderr, "Failed to restart acquisition with new integration time: %d\n", result);
+            return; // Error restarting acquisition
         }
 
-
+        
 
         result = WaitForAcquisition(); // Wait for acquisition to finish before checking again
 
@@ -1541,8 +1860,10 @@ void adjustIntegrationTime(Control *control, unsigned int targetIntensity, float
 
         
         result = hodr_getMostRecentImage(data, (size_t)xpixels); // Get the most recent image acquired
-        float kineticCycleTime, readoutTime;
-
+        
+        int readMode = hodr_getReadMode(); // Get the current read mode from HODR
+        int centre, height;
+        hodr_getSingleTrack(&centre, &height); // Get the current Single Track settings
 
         hodr_getAcquisitionTimings(&exposureTime, &kineticCycleTime, &readoutTime); // Get acquisition timings
 
@@ -1552,10 +1873,14 @@ void adjustIntegrationTime(Control *control, unsigned int targetIntensity, float
         float preAmpGain = preAmpGainValues[preAmpGainIndex]; // Get the pre-amplifier gain value based on the index
 
 
-        result = appendToFile(&exposureTime, &preAmpGain, &lastTemperature, data, xpixels); // Append data to output file
+        result = appendToFile(&exposureTime, &preAmpGain, &lastTemperature, &readMode, &centre, &height, data, xpixels); // Append data to output file
+
+
+
         control_set_number_spectra(control, nCapturedSpectra);
 
-	attemptLimit -= 1;
+        control_emit_acquisition_finished(control, nCapturedSpectra + 1);
+	    attemptLimit -= 1;
         printf("Attempts: %d\n", attemptLimit);
         if (attemptLimit <= 0) // Check if attempt limit is reached
         {
@@ -1578,6 +1903,9 @@ void setNextAcquisition(int *timeoutID, Control *control) // Function to set the
 
     guint wallclockInterval = control_get_wallclock_interval(control); // Get the wallclock interval from the control object
     gboolean wallclockActive = control_get_wallclock_acquisition_active(control); // Get the wallclock acquisition active status from the control object
+
+    
+
     printf("Current wallclock interval: %d minutes\n", wallclockInterval);
     fflush(stdout); // Flush stdout to ensure immediate output
     if (wallclockInterval == 0 || !wallclockActive)
@@ -1610,7 +1938,8 @@ void setNextAcquisition(int *timeoutID, Control *control) // Function to set the
     if (seconds == 0)
     {
         printf("Next acquisition is scheduled for the current time. Starting acquisition immediately.\n");
-        StartAcquisitionIfPossible(control); // Start acquisition immediately if seconds is 0
+        fflush(stdout); // Flush stdout to ensure immediate output
+        StartAcquisitionIfPossibleWallclock(control); // Start acquisition immediately if seconds is 0
         timeoutID = 0;                       // Reset the timeout ID since acquisition starts immediately
 
         return; // Do not set a timeout if acquisition starts immediately
@@ -1619,8 +1948,15 @@ void setNextAcquisition(int *timeoutID, Control *control) // Function to set the
     printf("Setting next acquisition in %u seconds...\n", seconds);
     fflush(stdout);
 
-    *timeoutID = g_timeout_add_seconds(seconds, (GSourceFunc)StartAcquisitionIfPossible, control); // Set a timeout to handle the acquisition loop
+    if (*timeoutID != 0)
+    {
+        printf("Removing existing timeout with ID: %u\n", *timeoutID);
+        g_source_remove(*timeoutID); // Remove the existing timeout if it exists
+        *timeoutID = 0;              // Reset the timeout ID
+    }
 
+    *timeoutID = g_timeout_add_seconds(seconds, (GSourceFunc)StartAcquisitionIfPossibleWallclock, control); // Set a timeout to handle the acquisition loop
+    
     printf("Setting next acquisition with timeout ID: %u\n", *timeoutID);
 
     printf("Next acquisition set successfully.\n");
@@ -1650,6 +1986,11 @@ void *handleAcquisitionLoop(void *arg) // Function to handle the acquisition loo
         printf("Waiting for next acquisition to finish...\n");
         fflush(stdout);                           // Flush stdout to ensure immediate output
         acquisitionStatus = WaitForAcquisition(); // Start waiting for acquisition data
+
+        
+        int status;
+        hodr_getStatus(&status); // Get the current acquisition status from HOD
+        control_set_acquisition_status(control, status); // Set the acquisition status in the control object
 
         if (!andorActive) // Check if Andor SDK is still active after waiting
         {
@@ -1695,11 +2036,15 @@ void *handleAcquisitionLoop(void *arg) // Function to handle the acquisition loo
         hodr_getCurrentPreAmpGain(&preAmpGainIndex, preAmpGainString); // Get the pre-amplifier gain index
         float preAmpGain = preAmpGainValues[preAmpGainIndex]; // Get the pre-amplifier gain value based on the index
 
+        int readMode = hodr_getReadMode(); // Get the current read mode from HODR
+        int centre, height;
+        hodr_getSingleTrack(&centre, &height); // Get the current Single Track settings
+
 
         fflush(stdout);
         printf("Acq. %d: Last temperature: %.2f\n", nCapturedSpectra + 1, lastTemperature); // Log the last temperature
         fflush(stdout);
-        result = appendToFile(&exposureTime, &preAmpGain, &lastTemperature, data, xpixels); // Append data to output file
+        result = appendToFile(&exposureTime, &preAmpGain, &lastTemperature, &readMode, &centre, &height, data, xpixels); // Append data to output file
         control_set_number_spectra(control, nCapturedSpectra);
         unsigned int targetIntensity = control_get_target_intensity(control); // Get the target intensity from the control object
         printf("Target intensity: %d\n", targetIntensity);                    // Log the target intensity
@@ -1709,12 +2054,13 @@ void *handleAcquisitionLoop(void *arg) // Function to handle the acquisition loo
         {
             printf("Acq. %d: Target intensity: %d at integration time %.5fs\n", nCapturedSpectra + 1, targetIntensity, exposureTime); // Log the target intensity
             fflush(stdout);
-            adjustIntegrationTime(control, targetIntensity, exposureTime, data, xpixels, 5); // Adjust integration time based on target intensity
+            adjustIntegrationTime(control, targetIntensity, exposureTime, data, xpixels, adjustmentAttemptLimit); // Adjust integration time based on target intensity
         }
         control_set_number_spectra(control, nCapturedSpectra);
         //hodr_getAcquisitionTimings(&exposureTime, &kineticCycleTime, &readoutTime);     // Get acquisition timings
 
         control_set_data_path(control, outFile);   // Set the data path in the control object
+        
         setNextAcquisition(&timerHandle, control); // Set the next acquisition time based on the wallclock acquisition interval
         printf("Data appended to file. Result: %d, N captured spectra: %d\n", result, nCapturedSpectra);
         fflush(stdout);

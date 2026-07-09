@@ -37,6 +37,9 @@ unsigned int hodr_init(char *andorPath, const char *outFile, bool resetConfig)
 
         // Set default configuration
         cfg.READ_MODE = READ_MODE_FVB;              // Default read mode
+        cfg.SINGLE_TRACK_HEIGHT = 20;                  // Default single track height
+        cfg.SINGLE_TRACK_CENTRE = 10;                  // Default single track centre
+        cfg.COOLER_MODE = 1;                        // Default cooler mode ON
         cfg.SHUTTER_TYPE = SHUTTER_TYP_OPEN_LOW;    // Default shutter type
         cfg.SHUTTER_MODE = SHUTTER_MODE_FULLY_AUTO; // Default shutter mode
         cfg.ACQUISITION_MODE = 1;                   // Default acquisition mode
@@ -68,13 +71,17 @@ unsigned int hodr_init(char *andorPath, const char *outFile, bool resetConfig)
 
 unsigned int hodr_deinit()
 {
-    unsigned int result = ShutDown();
-    if (result != DRV_SUCCESS)
-    {
-        fprintf(stderr, "Failed to shut down Andor SDK: %d\n", result);
-        return result; // Error
-    }
+    
+    hodr_abortAcquisition(); // Abort any ongoing acquisition
+    
+    hodr_setTargetTemperature(15); // Set target temperature to 0 before turning off cooler
+
+    hodr_setCoolerMode(false); // Turn off the cooler
+    fflush(stdout); // Flush stdout to ensure immediate output
+
+    hodr_shutDown();
     printf("Andor SDK shut down successfully.\n");
+    fflush(stdout); // Flush stdout to ensure immediate output
     return DRV_SUCCESS; // Success
 }
 
@@ -100,7 +107,7 @@ unsigned int hodr_setCoolerMode(bool mode)
         if (result != DRV_SUCCESS)
         {
             fprintf(stderr, "Failed to turn on cooler: %d\n", result);
-            return -1; // Error
+            return 1; // Error
         }
     }
     else
@@ -109,7 +116,7 @@ unsigned int hodr_setCoolerMode(bool mode)
         if (result != DRV_SUCCESS)
         {
             fprintf(stderr, "Failed to turn off cooler: %d\n", result);
-            return -1; // Error
+            return result; // Error
         }
     }
 
@@ -377,6 +384,30 @@ unsigned int hodr_getMostRecentImage(int32_t *data, size_t size)
     return result;
 }
 
+
+unsigned int hodr_setSingleTrack(int center, int height)
+{
+    unsigned int result = SetSingleTrack(center, height);
+    
+    if (result != DRV_SUCCESS)
+    {
+        fprintf(stderr, "Failed to set single track: %d\n", result);
+        return result; // Error
+    }
+
+    cfg.SINGLE_TRACK_CENTRE = center; // Update configuration
+    cfg.SINGLE_TRACK_HEIGHT = height; // Update configuration
+    return result;
+}
+
+unsigned int hodr_getSingleTrack(int *center, int *height)
+{
+    *center = cfg.SINGLE_TRACK_CENTRE;
+    *height = cfg.SINGLE_TRACK_HEIGHT;
+    return 0; // Success
+}
+
+
 unsigned int hodr_getAcquisitionTimings(float *exposureTime, float *kineticCycleTime, float *readoutTime)
 {
     unsigned int result = GetAcquisitionTimings(exposureTime, kineticCycleTime, readoutTime);
@@ -486,7 +517,7 @@ unsigned int hodr_getAcquisitionMode()
     return cfg.ACQUISITION_MODE; // Return the current acquisition mode
 }
 
-unsigned int hodr_getReadMode()
+int hodr_getReadMode()
 {
     return cfg.READ_MODE; // Return the current read mode
 }
