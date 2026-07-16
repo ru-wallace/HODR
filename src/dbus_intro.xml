@@ -108,7 +108,7 @@
         <method name="stop_acquisition" />
 
         <method name="get_data">
-            <arg name="data" type="(sdddai)" direction="out" />
+            <arg name="data" type="(sdddiiiai)" direction="out" />
         </method>
         <method name="stop_live" />
         <method name="exit" />

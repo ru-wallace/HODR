@@ -1,7 +1,7 @@
 import pathlib
 
 
-hodr_data_dir = pathlib.Path(__file__).parent.parent / "hodr_data"
+hodr_data_dir = pathlib.Path(__file__).parent.parent / "hodr_data_backup_3"
 
 
 
@@ -19,12 +19,20 @@ for data_file in hodr_data_dir.glob("*.csv"):
         #     print(f"Added new key to len_dict: {len(cols)}")
         #     print("Found in file:", data_file)
         # len_dict[str(len(cols))] += 1
-        if len(cols) != 1027:
+        print(f"Number of columns in line: {len(cols)}")
+        if len(cols) != 1028:
             continue
         
         # insert pre-amp gain value as 3rd column (index 2)
-        pre_amp_gain = 1.7  # default value
-        cols.insert(2, str(pre_amp_gain))
+        # pre_amp_gain = 1.7  # default value
+        # cols.insert(2, str(pre_amp_gain))
+        
+        read_mode = 0  # default value
+        cols.insert(4, str(read_mode))
+        
+        cols.insert(5, "")  # insert empty string as 7th column (index 6)
+        cols.insert(6, "")  # insert empty string as 8th column (index 7)
+        
         new_line = ",".join(cols) + "\n"
         lines[lines.index(line)] = new_line
     
