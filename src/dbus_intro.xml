@@ -9,6 +9,8 @@
         <property name="TargetTemperature" type="d" access="read" />
         <property name="TemperatureStatus" type="s" access="read" />
         <property name="IntegrationTimeSecs" type="d" access="read" />
+        <property name="IntervalTimeSecs" type="d" access="read" />
+        <property name="SeriesLength" type="u" access="read" />
         <property name="PreAmpGain" type="b" access="read" />
         <property name="acquisitionStatus" type="i" access="read" />
         <property name="acquisitionMode" type="u" access="read" />
@@ -45,6 +47,10 @@
             <arg name="result" type="b" direction="out" />
         </method>
 
+        <method name="set_series_length">
+            <arg name="length" type="u" direction="in" />
+            <arg name="result" type="b" direction="out" />
+        </method>
 
 
         <method name="activate">
@@ -97,11 +103,6 @@
         </method>
 
         <method name="start_acquisition">
-            <arg name="integration_time" type="d" direction="in" />
-            <arg name="pre_amp_gain" type="b" direction="in" />
-            <arg name="interval_time" type="d" direction="in" />
-            <arg name="acquisition_mode" type="u" direction="in" />
-            <arg name="n_captures" type="u" direction="in" />
             <arg name="ref" type="u" direction="out" />
         </method>
 

@@ -5,7 +5,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdint.h>
-#include <time.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/stat.h>
@@ -199,6 +198,9 @@ unsigned int hodr_setKineticCycleTime(float time)
     if (result != DRV_SUCCESS)
     {
         fprintf(stderr, "Failed to set kinetic cycle time: %d\n", result);
+    } else
+    {
+        cfg.INTERVAL = time; // Update configuration
     }
     return result;
 }
@@ -517,9 +519,63 @@ unsigned int hodr_getAcquisitionMode()
     return cfg.ACQUISITION_MODE; // Return the current acquisition mode
 }
 
+unsigned int hodr_getAcquisitionModeString(char *buffer, size_t bufferSize)
+{
+    switch (cfg.ACQUISITION_MODE)
+    {
+    case ACQ_MODE_SINGLE:
+        snprintf(buffer, bufferSize, "Single");
+        break;
+    case ACQ_MODE_ACCUMULATE:
+        snprintf(buffer, bufferSize, "Accumulate");
+        break;
+    case ACQ_MODE_KINETIC_SERIES:
+        snprintf(buffer, bufferSize, "Kinetic Series");
+        break;
+    case ACQ_MODE_FAST_KINETICS:
+        snprintf(buffer, bufferSize, "Fast Kinetics");
+        break;
+    case ACQ_MODE_RUN_TILL_ABORT:
+        snprintf(buffer, bufferSize, "Run Till Abort");
+        break;
+    default:
+        snprintf(buffer, bufferSize, "Unknown acquisition mode: %d", cfg.ACQUISITION_MODE);
+    }
+    return 0; // Success
+}
+
 int hodr_getReadMode()
 {
     return cfg.READ_MODE; // Return the current read mode
+}
+
+
+// Function to get the read mode as a string
+// min buffer size should be 32 bytes to accommodate the longest string
+int hodr_getReadModeString(char *buffer, size_t bufferSize)
+{
+
+    switch (cfg.READ_MODE)
+    {
+    case READ_MODE_FVB:
+        snprintf(buffer, bufferSize, "Full Vertical Binning");
+        break;
+    case READ_MODE_MULTI_TRACK:
+        snprintf(buffer, bufferSize, "Multi-Track");
+        break;
+    case READ_MODE_RANDOM_TRACK:
+        snprintf(buffer, bufferSize, "Random Track");
+        break;
+    case READ_MODE_SINGLE_TRACK:
+        snprintf(buffer, bufferSize, "Single Track");
+        break;
+    case READ_MODE_IMAGE:
+        snprintf(buffer, bufferSize, "Image");
+        break;
+    default:
+        snprintf(buffer, bufferSize, "Unknown read mode: %d", cfg.READ_MODE);
+    }
+    return 0; // Success
 }
 unsigned int hodr_getShutterType()
 {
@@ -792,4 +848,69 @@ uint32_t getConfigValueBool(const char *filePath, const char *key, bool *value)
     }
 }
 
+float getPreAmpGainValue(int index)
+{
+
+    size_t indexSizeT = (size_t)index; // Convert index to size_t for comparison
+    const float preAmpGainValues[2] = {1.0, 1.7}; // Array of pre-amplifier gain values
+    if (indexSizeT >= sizeof(preAmpGainValues) / sizeof(preAmpGainValues[0]))
+    {
+        fprintf(stderr, "Invalid pre-amp gain index: %d\n", index);
+        return -1.0f; // Error
+    }
+    return preAmpGainValues[index];
+}
+
+
+void printAcquisitionParameters(HODR_AcquisitionParams_t *params)
+{
+
+    if (params == NULL)
+    {
+        fprintf(stderr, "Error: Acquisition parameters pointer is NULL.\n");
+        return;
+    }
+
+    char readModeStr[32];
+    switch (params->readMode)
+    {
+    case READ_MODE_FVB:
+        snprintf(readModeStr, sizeof(readModeStr), "Full Vertical Binning");
+        break;
+    case READ_MODE_MULTI_TRACK:
+        snprintf(readModeStr, sizeof(readModeStr), "Multi-Track");
+        break;
+    case READ_MODE_RANDOM_TRACK:
+        snprintf(readModeStr, sizeof(readModeStr), "Random Track");
+        break;
+    case READ_MODE_SINGLE_TRACK:
+        snprintf(readModeStr, sizeof(readModeStr), "Single Track");
+        break;
+    case READ_MODE_IMAGE:
+        snprintf(readModeStr, sizeof(readModeStr), "Image");
+        break;
+    default:
+        snprintf(readModeStr, sizeof(readModeStr), "Unknown read mode");
+    }
+
+    struct tm *time_info;
+    char timeString[64]; // space for "HH:MM:SS\0"
+
+    
+    time_info = gmtime(&params->timestamp);
+
+
+
+    strftime(timeString, sizeof(timeString), "%Y-%m-%dT%H:%M:%S", time_info);
+
+    printf("Acquisition Parameters:\n");
+    printf("  Timestamp: %s\n", timeString);
+    printf("  Integration Time: %.2f seconds\n", params->integrationTime);
+    printf("  Pre-Amp Gain: %.1f\n", getPreAmpGainValue(params->preAmpGain));
+    printf("  Read Mode Index: %d (%s)\n", params->readMode, readModeStr);
+    printf("  Single Track Centre: %d\n", params->centre);
+    printf("  Single Track Height: %d\n", params->height);
+    printf("  Temperature: %.2f °C\n", params->temperature);
+    fflush(stdout); // Flush stdout to ensure immediate output
+}
 

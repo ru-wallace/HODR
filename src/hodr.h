@@ -1,14 +1,49 @@
+#define __USE_XOPEN // For strptime to be available in time.h
+#define __XOPEN_SOURCE
+#define __GNU_SOURCE // For strptime to be available in time.h
+
 #pragma once
 
+#include <time.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+
+#include <sys/select.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <gio/gio.h>
+#include <signal.h>
+
+#include "control.h"
+
+#include "atmcdLXd.h"
+
+
 
 #define SHUTTER_TYP_OPEN_LOW 0
 #define SHUTTER_TYP_OPEN_HIGH 1
 #define SHUTTER_MODE_FULLY_AUTO 0
 #define READ_MODE_FVB 0
+#define READ_MODE_MULTI_TRACK 1
+#define READ_MODE_RANDOM_TRACK 2
+#define READ_MODE_SINGLE_TRACK 3
+#define READ_MODE_IMAGE 4
 
+#define ACQ_MODE_SINGLE 1
+#define ACQ_MODE_ACCUMULATE 2
+#define ACQ_MODE_KINETIC_SERIES 3
+#define ACQ_MODE_FAST_KINETICS 4
+#define ACQ_MODE_RUN_TILL_ABORT 5
 
 
 
@@ -31,6 +66,17 @@ typedef struct {
     bool ACQ_FLAG; // Flag to indicate if acquisition should be started once temperature is stabilized
     char OUT_FILE[256]; // Output file for data
 } HODR_Config_t;
+
+
+typedef struct {
+    float integrationTime; // Integration time in seconds
+    int preAmpGain; // Pre-amplifier gain index
+    int readMode; // Read mode index
+    int centre; // Centre of the single track used when read mode is set to 4
+    int height; // Height of the single track used when read mode is set to 4
+    float temperature; // Current temperature of the detector
+    time_t timestamp; // Time when the acquisition started
+} HODR_AcquisitionParams_t;
 
 
 unsigned int hodr_getDetectorSize(int *xpixels, int *ypixels);
@@ -66,12 +112,15 @@ unsigned int hodr_getNumberNewImages(int32_t *firstNewImageIndex, int32_t *lastN
 unsigned int hodr_getImages(int32_t firstNewImageIndex, int32_t lastNewImageIndex, int32_t *data, size_t size, int32_t *validFirst, int32_t *validLast);
 unsigned int hodr_getMostRecentImage(int32_t *data, size_t size);
 unsigned int hodr_getAcquisitionTimings(float *exposureTime, float *kineticCycleTime, float *readoutTime);
+
 unsigned int hodr_abortAcquisition();
 unsigned int hodr_getAcqFlag();
 unsigned int hodr_getNumberAcquisitions();
 
 unsigned int hodr_getAcquisitionMode();
+unsigned int hodr_getAcquisitionModeString(char *buffer, size_t bufferSize);
 int hodr_getReadMode();
+int hodr_getReadModeString(char *buffer, size_t bufferSize);
 unsigned int hodr_getShutterType();
 unsigned int hodr_setKineticCycleTime(float time);
 unsigned int hodr_getOutFile(char *outFile, size_t size);
@@ -89,3 +138,5 @@ uint32_t getConfigValueInt(const char *filePath, const char *key, int *value);
 uint32_t getConfigValueUnsignedInt(const char *filePath, const char *key, unsigned int *value);
 uint32_t getConfigValueFloat(const char *filePath, const char *key, float *value);
 uint32_t getConfigValueBool(const char *filePath, const char *key, bool *value);
+float getPreAmpGainValue(int index);
+void printAcquisitionParameters(HODR_AcquisitionParams_t *params);
